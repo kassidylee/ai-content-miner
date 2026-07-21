@@ -1,14 +1,19 @@
 # utils/raditer.py
+"""
+RadIter 决策日志模块
+"""
 import os
 import json
 from datetime import datetime
 
-LOG_FILE = "./logs/raditer.log"
+import config
+
+LOG_FILE = config.RADITER_LOG_FILE
 
 
 def log_decision(item: dict, output_path: str):
-    """记录 RadIter 决策日志，用于后续优化"""
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
     article = item.get("article", {})
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -21,5 +26,23 @@ def log_decision(item: dict, output_path: str):
         "is_second_hand": item.get("is_second_hand", False),
         "original_source": item.get("original_source", "")
     }
+
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def get_recent_decisions(limit: int = 100) -> list:
+    if not os.path.exists(LOG_FILE):
+        return []
+
+    decisions = []
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    decisions.append(json.loads(line))
+                except:
+                    continue
+
+    return decisions[-limit:]

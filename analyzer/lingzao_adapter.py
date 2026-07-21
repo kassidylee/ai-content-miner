@@ -1,25 +1,18 @@
 # analyzer/lingzao_adapter.py
 """
 lingzao-skill 适配器
-将 lingzao-skill 的分析能力集成到工作流中
-参考: https://github.com/atian-create/lingzao-skill 
 """
 import json
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List
 from openai import OpenAI
+
 import config
 
-# 初始化 LLM 客户端（lingzao-skill 也基于 LLM）
 client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 
 
 class LingzaoAnalyzer:
-    """
-    灵造分析器 - 模拟 lingzao-skill 的核心能力
-    包括：账号诊断、爆款拆解、对标筛选、内容研究
-    """
-
     def __init__(self):
         self.system_prompt = """你是一个专业的小红书/社媒内容分析师（灵造 Skill 风格）。
 你的任务是对社媒内容进行深度分析，包括：
@@ -31,13 +24,13 @@ class LingzaoAnalyzer:
 请输出结构化分析结果。"""
 
     def analyze(self, article: Dict) -> Dict:
-        """对单篇文章进行 lingzao 风格分析"""
+        if not config.ENABLE_LINGZAO_ANALYSIS:
+            return {"error": "lingzao analysis disabled"}
+
         title = article.get("title", "无标题")
         content = article.get("content", "")[:2000]
         author = article.get("author", "未知作者")
         source = article.get("source", "小红书")
-
-        # 提取互动数据
         likes = article.get("likes", 0)
         comments = article.get("comments", 0)
 
@@ -68,7 +61,7 @@ class LingzaoAnalyzer:
   }},
   "keywords": ["关键词1", "关键词2"],
   "summary": "一句话总结（20字内）",
-  "quality_score": 0.0  // 0-10分
+  "quality_score": 0.0
 }}"""
 
         try:
@@ -78,11 +71,10 @@ class LingzaoAnalyzer:
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.2,
+                temperature=config.SCORE_TEMPERATURE,
                 max_tokens=800
             )
             raw = response.choices[0].message.content.strip()
-            # 提取 JSON
             json_match = re.search(r'\{[\s\S]*\}', raw)
             if json_match:
                 return json.loads(json_match.group())
@@ -91,15 +83,7 @@ class LingzaoAnalyzer:
             return {"error": str(e)}
 
     def find_benchmark_accounts(self, niche: str) -> List[Dict]:
-        """对标账号发现与筛选"""
-        # 模拟 lingzao-skill 的对标账号发现功能
-        prompt = f"""请推荐 5 个 {niche} 领域的优质小红书/知乎博主。
-        输出格式：JSON 列表，每个包含 name, url, reason。
-        """
-        # 实际实现可调用搜索 API 或使用预置数据
         return []
 
     def diagnose_account(self, author: str, articles: List[Dict]) -> Dict:
-        """账号诊断"""
-        # 分析该账号的历史文章，给出综合诊断
         return {}
