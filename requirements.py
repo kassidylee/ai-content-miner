@@ -1,0 +1,6 @@
+# requirements.txt
+requests>=2.28.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+playwright>=1.40.0
+pandas>=2.0.0

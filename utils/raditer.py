@@ -1,0 +1,25 @@
+# utils/raditer.py
+import os
+import json
+from datetime import datetime
+
+LOG_FILE = "./logs/raditer.log"
+
+
+def log_decision(item: dict, output_path: str):
+    """记录 RadIter 决策日志，用于后续优化"""
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    article = item.get("article", {})
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "title": article.get("title", "无标题"),
+        "score": item.get("total_score", 0),
+        "output": output_path,
+        "source": article.get("source", "未知"),
+        "dimensions": item.get("dimensions", []),
+        "scores": item.get("scores", []),
+        "is_second_hand": item.get("is_second_hand", False),
+        "original_source": item.get("original_source", "")
+    }
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")

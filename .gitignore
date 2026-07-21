@@ -1,0 +1,7 @@
+__pycache__/ 
+*.pyc 
+data/ 
+reports/ 
+logs/ 
+.idea/ 
+.vscode/ 
