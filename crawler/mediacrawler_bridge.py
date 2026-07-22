@@ -11,31 +11,19 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence
 from uuid import uuid4
 
 import config
+from crawler.base import CrawlRunResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SUPPORTED_PLATFORMS = {"xhs", "zhihu"}
 SUPPORTED_CRAWL_TYPES = {"search"}
 SUPPORTED_LOGIN_TYPES = {"qrcode", "phone"}
-
-
-@dataclass(frozen=True)
-class CrawlRunResult:
-    """一次 MediaCrawler 运行的可审计结果。"""
-
-    success: bool
-    data_files: Tuple[Path, ...] = ()
-    command: Tuple[str, ...] = ()
-    output_dir: Optional[Path] = None
-    returncode: Optional[int] = None
-    error: str = ""
 
 
 def _resolve_project_path(value: str) -> Path:
@@ -204,6 +192,10 @@ class MediaCrawlerBridge:
             output_dir=output_dir,
             returncode=completed.returncode,
         )
+
+    def acknowledge(self) -> str:
+        """MediaCrawler 当前没有需要在工作流成功后提交的采集状态。"""
+        return ""
 
     def _find_content_files(self, output_dir: Path) -> List[Path]:
         content_dir = output_dir / self.platform / "jsonl"
