@@ -4,6 +4,8 @@
 
 import os
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
 # ============================================================
 # 1. LLM API 配置
 # ============================================================
@@ -40,7 +42,16 @@ BLOGGER_WHITELIST = {
 # 4. MediaCrawler 爬虫配置
 # ============================================================
 
-MEDIACRAWLER_PATH = "./MediaCrawler"
+MEDIACRAWLER_PATH = os.path.join(PROJECT_ROOT, "MediaCrawler")
+
+# 本项目桥接器已按该 commit 的 CLI 与 JSONL 输出格式完成对齐。
+MEDIACRAWLER_COMMIT = "c9a111be73586bdf6fc44536f088e4db6ed86d64"
+
+# 默认使用 MediaCrawler 官方推荐的 uv。仅在未安装 uv 时填写一个
+# Python >= 3.11 且已安装 MediaCrawler 依赖的解释器路径。
+MEDIACRAWLER_PYTHON = ""
+MEDIACRAWLER_LOGIN_TYPE = "qrcode"
+MEDIACRAWLER_TIMEOUT_SECONDS = 900
 
 # 支持平台：xhs（小红书）/ zhihu
 CRAWL_PLATFORM = "xhs"
@@ -58,7 +69,8 @@ SEARCH_KEYWORDS = [
 ]
 
 CRAWL_LIMIT = 20
-DATA_DIR = "./data"
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
 # ============================================================
 # 5. 企业微信推送配置
@@ -81,9 +93,9 @@ ENABLE_RETRIEVAL = True
 # 7. 日志与输出配置
 # ============================================================
 
-LOG_DIR = "./logs"
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 RADITER_LOG_FILE = os.path.join(LOG_DIR, "raditer.log")
-REPORT_DIR = "./reports"
+REPORT_DIR = os.path.join(PROJECT_ROOT, "reports")
 LOG_LEVEL = "INFO"
 
 # ============================================================
@@ -101,7 +113,7 @@ ENABLE_LINGZAO_ANALYSIS = True
 # ============================================================
 
 def init_directories():
-    dirs = [DATA_DIR, REPORT_DIR, LOG_DIR, "./articles"]
+    dirs = [DATA_DIR, REPORT_DIR, LOG_DIR, ARTICLES_DIR]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
 

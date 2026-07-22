@@ -4,7 +4,7 @@ lingzao-skill 适配器
 """
 import json
 import re
-from typing import Dict, List
+from typing import Dict
 from openai import OpenAI
 
 import config
@@ -81,9 +81,3 @@ class LingzaoAnalyzer:
             return {"error": "解析失败", "raw": raw}
         except Exception as e:
             return {"error": str(e)}
-
-    def find_benchmark_accounts(self, niche: str) -> List[Dict]:
-        return []
-
-    def diagnose_account(self, author: str, articles: List[Dict]) -> Dict:
-        return {}

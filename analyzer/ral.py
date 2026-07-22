@@ -52,8 +52,8 @@ def ral_pipeline(item: Dict) -> Dict:
             return item
 
     # 3. 转载声明
-   转载_keywords = ["转载", "本文来自", "来源：", "原文链接", "原发", "转自", "源自"]
-    for kw in 转载_keywords:
+    repost_keywords = ["转载", "本文来自", "来源：", "原文链接", "原发", "转自", "源自"]
+    for kw in repost_keywords:
         if kw in content[:500]:
             url_match = re.search(r'(?:原文链接|来源|转自)[：:]\s*(https?://[^\s]+)', content[:1000])
             if url_match:

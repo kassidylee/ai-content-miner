@@ -1,6 +1,10 @@
 #!/bin/bash
 # steps.sh - 一键部署脚本
 
+set -euo pipefail
+
+MEDIACRAWLER_COMMIT="c9a111be73586bdf6fc44536f088e4db6ed86d64"
+
 echo "🚀 AI Content Miner 一键部署"
 
 # 1. 克隆 MediaCrawler
@@ -10,13 +14,13 @@ git clone https://github.com/NanmiCoder/MediaCrawler.git
 # 2. 安装 MediaCrawler 依赖
 echo "📦 安装 MediaCrawler 依赖..."
 cd MediaCrawler
-pip install -r requirements.txt
-playwright install
+git checkout "$MEDIACRAWLER_COMMIT"
+uv sync
 cd ..
 
 # 3. 安装本项目依赖
 echo "📦 安装本项目依赖..."
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # 4. 配置提示
 echo ""
@@ -28,8 +32,9 @@ echo ""
 
 # 5. 启动预览服务
 echo "📁 启动预览服务..."
-echo "   python server.py"
+echo "   python3 server.py"
 
 # 6. 运行工作流
 echo "🚀 运行工作流..."
-echo "   python main.py"
+echo "   python3 main.py --check-config"
+echo "   python3 main.py"

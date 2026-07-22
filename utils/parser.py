@@ -1,13 +1,15 @@
 # utils/parser.py
 """
 文章解析工具（唯一权威实现）
-支持：.md 文件解析、MediaCrawler 数据标准化、统一数据加载入口、递归加载子目录
+支持：.md 文件解析、MediaCrawler 数据标准化、显式内容文件加载
 """
 import os
 import re
 import json
+import csv
 from datetime import datetime
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Union
 
 import config
 
@@ -35,7 +37,7 @@ def parse_metadata(content: str) -> Dict:
             try:
                 metadata["publish_time"] = datetime.strptime(time_str, fmt)
                 break
-            except:
+            except ValueError:
                 continue
 
     return metadata
@@ -43,7 +45,7 @@ def parse_metadata(content: str) -> Dict:
 
 def read_articles_from_folder() -> List[Dict]:
     articles = []
-    articles_dir = "./articles"
+    articles_dir = config.ARTICLES_DIR
     if not os.path.exists(articles_dir):
         os.makedirs(articles_dir, exist_ok=True)
         return articles
@@ -76,7 +78,26 @@ def read_articles_from_folder() -> List[Dict]:
 
 
 # ---------- MediaCrawler 数据标准化 ----------
-def normalize_article(raw: Dict) -> Dict:
+def _coerce_count(value: object) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    text = str(value).strip().replace(",", "")
+    multipliers = {"万": 10_000, "w": 10_000, "k": 1_000}
+    multiplier = 1
+    if text and text[-1].lower() in multipliers:
+        multiplier = multipliers[text[-1].lower()]
+        text = text[:-1]
+    try:
+        return int(float(text) * multiplier)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_article(raw: Dict, platform: str = "") -> Dict:
+    """将 MediaCrawler xhs/zhihu 内容记录转换为项目统一格式。"""
     title = (
         raw.get("title") or raw.get("标题") or raw.get("note_title") or
         raw.get("name") or raw.get("nickname") or raw.get("display_name") or "无标题"
@@ -84,7 +105,8 @@ def normalize_article(raw: Dict) -> Dict:
 
     content = (
         raw.get("content") or raw.get("正文") or raw.get("description") or
-        raw.get("note_content") or raw.get("text") or raw.get("desc") or raw.get("raw_text") or ""
+        raw.get("note_content") or raw.get("content_text") or raw.get("text") or
+        raw.get("desc") or raw.get("raw_text") or ""
     )
     if isinstance(content, list):
         content = "\n".join([str(c) for c in content])
@@ -93,23 +115,25 @@ def normalize_article(raw: Dict) -> Dict:
 
     source = (
         raw.get("source") or raw.get("平台") or raw.get("platform") or
-        raw.get("platform_name") or raw.get("site") or "未知"
+        raw.get("platform_name") or raw.get("site") or platform or "未知"
     )
 
     url = (
         raw.get("url") or raw.get("链接") or raw.get("note_url") or
-        raw.get("link") or raw.get("share_url") or raw.get("web_url") or ""
+        raw.get("content_url") or raw.get("link") or raw.get("share_url") or
+        raw.get("web_url") or ""
     )
 
     author = (
         raw.get("author") or raw.get("作者") or raw.get("nickname") or
-        raw.get("user_name") or raw.get("username") or raw.get("user_id") or
-        raw.get("uid") or raw.get("author_name") or ""
+        raw.get("user_nickname") or raw.get("user_name") or raw.get("username") or
+        raw.get("user_id") or raw.get("uid") or raw.get("author_name") or ""
     )
 
     likes = (
         raw.get("likes") or raw.get("点赞数") or raw.get("like_count") or
-        raw.get("liked_count") or raw.get("like_num") or raw.get("like_cnt") or 0
+        raw.get("liked_count") or raw.get("voteup_count") or raw.get("like_num") or
+        raw.get("like_cnt") or 0
     )
 
     comments = (
@@ -128,8 +152,8 @@ def normalize_article(raw: Dict) -> Dict:
 
     publish_time = (
         raw.get("publish_time") or raw.get("发布时间") or raw.get("time") or
-        raw.get("created_at") or raw.get("create_time") or raw.get("post_time") or
-        raw.get("date") or None
+        raw.get("created_at") or raw.get("created_time") or raw.get("create_time") or
+        raw.get("post_time") or raw.get("date") or None
     )
 
     if isinstance(publish_time, str):
@@ -138,7 +162,7 @@ def normalize_article(raw: Dict) -> Dict:
             try:
                 publish_time = datetime.strptime(publish_time, fmt)
                 break
-            except:
+            except ValueError:
                 continue
 
     if isinstance(publish_time, (int, float)):
@@ -147,20 +171,24 @@ def normalize_article(raw: Dict) -> Dict:
                 publish_time = datetime.fromtimestamp(publish_time / 1000)
             else:
                 publish_time = datetime.fromtimestamp(publish_time)
-        except:
+        except (OSError, OverflowError, ValueError):
             publish_time = None
+
+    normalized_source = source_classify(str(source))
+    if normalized_source == "未知" and source and source != "未知":
+        normalized_source = str(source)
 
     return {
         "title": str(title) if title else "无标题",
         "content": str(content) if content else "",
-        "source": str(source) if source else "未知",
+        "source": normalized_source,
         "url": str(url) if url else "",
         "publish_time": publish_time,
         "author": str(author) if author else "",
-        "likes": int(likes) if likes else 0,
-        "comments": int(comments) if comments else 0,
-        "collects": int(collects) if collects else 0,
-        "shares": int(shares) if shares else 0,
+        "likes": _coerce_count(likes),
+        "comments": _coerce_count(comments),
+        "collects": _coerce_count(collects),
+        "shares": _coerce_count(shares),
         "raw": raw
     }
 
@@ -178,7 +206,12 @@ def source_classify(source: str) -> str:
     if "知乎" in source or "zhihu" in source_lower:
         return "知乎"
 
-    if "公众号" in source or "wechat" in source_lower or "微信" in source or "mp.weixin" in source_lower:
+    if (
+        "公众号" in source
+        or "wechat" in source_lower
+        or "微信" in source
+        or "mp.weixin" in source_lower
+    ):
         return "微信公众号"
 
     # 预留扩展
@@ -193,69 +226,92 @@ def source_classify(source: str) -> str:
 
 
 # ---------- 统一数据加载入口 ----------
-def load_articles() -> List[Dict]:
-    articles = []
+PathLike = Union[str, os.PathLike]
 
-    # 1. 从 data/ 递归加载
-    if os.path.exists(config.DATA_DIR):
-        for root, dirs, files in os.walk(config.DATA_DIR):
-            for filename in files:
-                filepath = os.path.join(root, filename)
 
-                if filename.endswith(".json"):
-                    try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+def _append_json_data(data: object, articles: List[Dict], platform: str) -> None:
+    if isinstance(data, list):
+        articles.extend(
+            normalize_article(item, platform) for item in data if isinstance(item, dict)
+        )
+        return
+    if not isinstance(data, dict):
+        return
 
-                        if isinstance(data, list):
-                            for item in data:
-                                if isinstance(item, dict):
-                                    articles.append(normalize_article(item))
-                        elif isinstance(data, dict):
-                            list_keys = ["data", "list", "items", "notes", "articles", "result", "results", "records", "feeds"]
-                            found_list = False
-                            for key in list_keys:
-                                if key in data and isinstance(data[key], list):
-                                    for item in data[key]:
-                                        if isinstance(item, dict):
-                                            articles.append(normalize_article(item))
-                                    found_list = True
-                                    break
-                            if not found_list:
-                                articles.append(normalize_article(data))
-                    except Exception as e:
-                        print(f"   ⚠️ 加载失败: {filename} - {e}")
+    list_keys = [
+        "data", "list", "items", "notes", "articles", "result", "results",
+        "records", "feeds",
+    ]
+    for key in list_keys:
+        if isinstance(data.get(key), list):
+            articles.extend(
+                normalize_article(item, platform)
+                for item in data[key]
+                if isinstance(item, dict)
+            )
+            return
+    articles.append(normalize_article(data, platform))
 
-                elif filename.endswith(".jsonl"):
-                    try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            for line in f:
-                                line = line.strip()
-                                if line:
-                                    try:
-                                        articles.append(normalize_article(json.loads(line)))
-                                    except:
-                                        continue
-                    except Exception as e:
-                        print(f"   ⚠️ JSONL 读取失败: {filename} - {e}")
 
-                elif filename.endswith(".csv"):
-                    try:
-                        import pandas as pd
-                        df = pd.read_csv(filepath, encoding="utf-8")
-                        for _, row in df.iterrows():
-                            articles.append(normalize_article(row.to_dict()))
-                    except ImportError:
-                        pass
-                    except Exception as e:
-                        print(f"   ⚠️ CSV 读取失败: {filename} - {e}")
+def _load_article_file(filepath: Path, articles: List[Dict], platform: str) -> None:
+    if filepath.suffix == ".json":
+        with filepath.open("r", encoding="utf-8") as file_obj:
+            _append_json_data(json.load(file_obj), articles, platform)
+        return
 
-    # 2. 回退到 articles/
-    if not articles:
-        print("   ℹ️ 未找到爬虫数据，尝试从 ./articles/ 加载手动文章...")
+    if filepath.suffix == ".jsonl":
+        with filepath.open("r", encoding="utf-8") as file_obj:
+            for line_number, line in enumerate(file_obj, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    print(
+                        f"   ⚠️ 跳过无效 JSONL：{filepath.name}:{line_number} - {exc}"
+                    )
+                    continue
+                if isinstance(data, dict):
+                    articles.append(normalize_article(data, platform))
+        return
+
+    if filepath.suffix == ".csv":
+        with filepath.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            for row in csv.DictReader(file_obj):
+                articles.append(normalize_article(dict(row), platform))
+
+
+def load_articles(
+    data_files: Optional[Iterable[PathLike]] = None,
+    platform: str = "",
+    allow_manual_fallback: bool = True,
+) -> List[Dict]:
+    """只加载显式传入的本次爬虫内容文件。
+
+    不再递归扫描 ``data/``，以免把历史运行、评论或创作者记录误当成文章。
+    手动文章回退仅在调用方明确允许时启用。
+    """
+    articles: List[Dict] = []
+
+    for raw_path in data_files or ():
+        filepath = Path(raw_path)
+        if "_comments_" in filepath.name or "_creators_" in filepath.name:
+            print(f"   ⚠️ 跳过非内容文件: {filepath.name}")
+            continue
+        if filepath.suffix not in {".json", ".jsonl", ".csv"}:
+            print(f"   ⚠️ 跳过不支持的数据文件: {filepath}")
+            continue
+        try:
+            _load_article_file(filepath, articles, platform)
+        except (OSError, json.JSONDecodeError, csv.Error) as exc:
+            print(f"   ⚠️ 加载失败: {filepath.name} - {exc}")
+
+    if not articles and allow_manual_fallback:
+        print("   ℹ️ 未找到本次爬虫数据，尝试从 ./articles/ 加载手动文章...")
         articles = read_articles_from_folder()
 
-    # 3. 应用 CRAWL_LIMIT
+    # 应用本项目下游处理数量限制。
     limit = getattr(config, 'CRAWL_LIMIT', 0)
     if limit > 0 and len(articles) > limit:
         print(f"   📊 应用数量限制: {len(articles)} → {limit}")
