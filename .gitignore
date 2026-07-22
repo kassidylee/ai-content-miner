@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
+.env
+.env.*
+!.env.example
+.local/
+cookies.json
+twikit_cookies.json
 MediaCrawler/
 articles/
 data/
