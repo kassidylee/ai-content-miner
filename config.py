@@ -39,7 +39,29 @@ BLOGGER_WHITELIST = {
 }
 
 # ============================================================
-# 4. MediaCrawler 爬虫配置
+# 4. 内容采集配置
+# ============================================================
+
+# 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
+# xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
+CRAWL_PLATFORM = "xhs"
+
+# 搜索关键词列表
+SEARCH_KEYWORDS = [
+    "AI Agent",
+    "大模型",
+    "量化投资",
+    "LLM",
+    "强化学习"
+]
+
+# 本次运行进入下游流程的总数量上限。
+CRAWL_LIMIT = 20
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
+
+# ============================================================
+# 4.1 MediaCrawler（小红书、知乎）
 # ============================================================
 
 MEDIACRAWLER_PATH = os.path.join(PROJECT_ROOT, "MediaCrawler")
@@ -53,24 +75,28 @@ MEDIACRAWLER_PYTHON = ""
 MEDIACRAWLER_LOGIN_TYPE = "qrcode"
 MEDIACRAWLER_TIMEOUT_SECONDS = 900
 
-# 支持平台：xhs（小红书）/ zhihu
-CRAWL_PLATFORM = "xhs"
-
 # 爬取类型：search / detail / creator
 CRAWL_TYPE = "search"
 
-# 搜索关键词列表（多个关键词依次爬取）
-SEARCH_KEYWORDS = [
-    "AI Agent",
-    "大模型",
-    "量化投资",
-    "LLM",
-    "强化学习"
-]
+# ============================================================
+# 4.2 twscrape（X，实验接口）
+# ============================================================
 
-CRAWL_LIMIT = 20
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
+# 本项目直接对齐 PyPI twscrape 0.19.2 的异步 API。
+TWSCRAPE_EXPECTED_VERSION = "0.19.2"
+TWSCRAPE_SEARCH_PRODUCT = "Latest"
+TWSCRAPE_RESULTS_PER_QUERY = 20
+TWSCRAPE_TIMEOUT_SECONDS = 120
+TWSCRAPE_ACCOUNT_WAIT_SECONDS = 10
+TWSCRAPE_LOOKBACK_HOURS = 168
+
+# 会话数据库包含浏览器 Cookie，只能保存在本机，不得提交 Git。
+TWSCRAPE_DB_FILE = os.environ.get(
+    "TWSCRAPE_DB_FILE",
+    os.path.join(PROJECT_ROOT, ".local", "x", "twscrape.db"),
+)
+TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
+TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
 # 5. 企业微信推送配置
