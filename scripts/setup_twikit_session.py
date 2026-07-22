@@ -1,4 +1,4 @@
-"""交互式创建仅保存在本机的 Twikit Cookie 文件。"""
+"""交互式创建仅保存在本机的 Twikit Cookie 文件（实验功能）。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import config  # noqa: E402
+
+
+KNOWN_TRANSACTION_ERROR = "Couldn't get KEY_BYTE indices"
+KNOWN_TRANSACTION_ISSUE_URL = "https://github.com/d60/twikit/issues/409"
 
 
 def _cookie_path() -> Path:
@@ -57,6 +61,18 @@ async def create_session(path: Path) -> None:
         path.chmod(0o600)
 
 
+def _format_login_error(exc: Exception) -> str:
+    if KNOWN_TRANSACTION_ERROR in str(exc):
+        return (
+            "登录失败：Twikit 2.3.3 当前无法解析 X 网页请求所需的交易参数\n"
+            f"已知错误：{KNOWN_TRANSACTION_ERROR}\n"
+            "这通常发生在校验用户名和密码之前，不代表凭证填写错误。"
+            "请停止重复登录。\n"
+            f"上游问题：{KNOWN_TRANSACTION_ISSUE_URL}"
+        )
+    return f"登录失败：{type(exc).__name__}: {exc}"
+
+
 def main() -> int:
     path = _cookie_path()
     if path.exists():
@@ -72,7 +88,7 @@ def main() -> int:
         print("\n已取消登录")
         return 130
     except Exception as exc:
-        print(f"登录失败：{type(exc).__name__}: {exc}")
+        print(_format_login_error(exc))
         return 1
 
     print("Twikit 本地会话已创建。请勿提交或分享该文件。")
