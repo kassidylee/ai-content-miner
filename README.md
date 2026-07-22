@@ -32,6 +32,7 @@
 ### 前置条件
 
 - Python 3.9 或更高版本
+- [uv](https://docs.astral.sh/uv/)（用于安装并运行 MediaCrawler）
 - OpenAI API Key，或兼容接口的 API Key
 - 企业微信机器人 Webhook
 
@@ -45,16 +46,16 @@ cd ai-content-miner
 ### 2. 安装依赖
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
+
+本项目与 MediaCrawler 使用相互独立的 Python 环境。本项目的
+`requirements.txt` 只安装内容处理和推送依赖；MediaCrawler 依赖由其
+`uv.lock` 管理，避免把两个项目的 Playwright、pandas 等版本混装。
 
 ### 3. 配置项目
 
-复制示例配置文件：
-
-```bash
-cp config.example.py config.py
-```
+编辑仓库中的 `config.py`：
 
 以下三项为必填配置：
 
@@ -75,22 +76,26 @@ REPORT_BASE_URL = "http://127.0.0.1:8000/reports"
 
 ### 4. 配置 MediaCrawler
 
-在项目根目录克隆并安装 MediaCrawler：
+当前桥接器明确对齐 MediaCrawler commit
+`c9a111be73586bdf6fc44536f088e4db6ed86d64`。在项目根目录克隆并安装：
 
 ```bash
 git clone https://github.com/NanmiCoder/MediaCrawler.git
 cd MediaCrawler
-pip install -r requirements.txt
-playwright install
+git checkout c9a111be73586bdf6fc44536f088e4db6ed86d64
+uv sync
 cd ..
 ```
 
-MediaCrawler 首次运行通常需要扫码登录。建议先进入 `MediaCrawler/` 目录手动运行测试，确认登录和爬取流程正常。
+该 MediaCrawler 版本要求 Python 3.11 或更高版本，`uv sync` 会按其
+`pyproject.toml` 和 `uv.lock` 建立独立环境。MediaCrawler 首次运行通常需要扫码登录；
+默认 CDP 模式还需要按其说明准备 Chrome。若 MediaCrawler 位于其他目录，请在
+`config.py` 中设置绝对路径 `MEDIACRAWLER_PATH`。
 
 ### 5. 启动报告预览服务
 
 ```bash
-python server.py
+python3 server.py
 ```
 
 然后在浏览器中访问：
@@ -104,15 +109,19 @@ http://127.0.0.1:8000/reports/
 ### 6. 运行完整工作流
 
 ```bash
-python main.py
+python3 main.py --check-config
+python3 main.py
 ```
+
+`--check-config` 只检查必填配置、MediaCrawler 路径、commit 和运行解释器，
+不会启动爬虫、调用模型或发送企业微信消息。配置、爬虫退出码、当次无数据或推送
+失败时，主程序均返回非零退出状态。
 
 ## 项目结构
 
 ```text
 ai-content-miner/
-├── config.example.py           # 公开的配置模板
-├── config.py                   # 本地配置文件，不建议提交真实凭证
+├── config.py                   # 项目配置，不要提交真实凭证
 ├── main.py                     # 主入口，全自动流水线
 ├── server.py                   # 静态报告预览服务
 ├── requirements.txt            # Python 依赖
@@ -153,7 +162,7 @@ ai-content-miner/
 
 ```text
 MediaCrawler
-  -> 数据加载与标准化
+  -> 本次运行内容文件加载与标准化
   -> lingzao 分析
   -> 规则过滤
   -> 动态评分
@@ -161,6 +170,12 @@ MediaCrawler
   -> 输出生成
   -> 企业微信推送
 ```
+
+每次 MediaCrawler 调用都通过 CLI 传入平台、关键词、数量限制、JSONL 格式和
+独立输出目录，不会修改 MediaCrawler 的 `config/base_config.py`。当前下游不消费
+评论数据，因此调用时明确关闭评论抓取。加载器只读取本次运行产生的
+`<type>_contents_<date>.jsonl`，不会递归读取历史输出，也不会把 comments/creators
+误当成文章。
 
 ## 输出模式
 
@@ -210,8 +225,27 @@ MediaCrawler
 | `REPORT_BASE_URL` | 报告预览服务地址，必须可被员工访问 | `http://127.0.0.1:8000/reports` |
 | `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu` |
 | `SEARCH_KEYWORDS` | 搜索关键词 | `["AI Agent", "大模型"]` |
+| `MEDIACRAWLER_PATH` | MediaCrawler 仓库路径 | `./MediaCrawler` |
+| `MEDIACRAWLER_COMMIT` | 已对齐并校验的 commit | `c9a111b...` |
+| `MEDIACRAWLER_PYTHON` | 未使用 uv 时的 Python >=3.11 解释器，可留空 | `/path/to/python` |
 | `BLOGGER_WHITELIST` | 博主白名单及权重 | `{"博主A": {"weight": 1.3}}` |
 | `ENABLE_RETRIEVAL` | 是否启用来源识别 | `True`、`False` |
+
+## 当前接入边界
+
+- 主流程实际调用 MediaCrawler、当次内容加载、可选 lingzao 分析、规则过滤、AI
+  评分、可选 RAL 来源识别、报告生成和企业微信推送。
+- `ENABLE_LINGZAO_ANALYSIS=False` 或 `ENABLE_RETRIEVAL=False` 时会明确跳过对应步骤，
+  不做无效果调用。
+- 原有 lingzao 适配器中两个始终返回空对象、且没有调用方的方法已移除。
+- RAL 当前只做已有文本与 URL 的来源识别；原文抓取、缓存和循环重评仍未实现。
+- `find_original_article`、`extract_summary`、`extract_keywords`、`count_words` 和
+  `get_recent_decisions` 是已有且有实际实现的工具 API，但当前主流程没有消费者；
+  本轮没有为了凑流程而调用它们。手动 `articles/` 加载也不会在自动爬取流程中回退触发。
+- MediaCrawler 的 `detail`、`creator` 参数尚未在本项目配置中接入，启动检查会明确
+  拒绝这两种模式；当前只支持 `search`。
+- 登录方式当前只接入 `qrcode`、`phone`；为避免凭证出现在命令日志或仓库配置中，
+  本轮没有接入 cookie 参数。
 
 ## 常见问题
 
@@ -224,7 +258,7 @@ MediaCrawler
 ### Q2：企业微信中的报告链接无法打开怎么办？
 
 - 检查 `REPORT_BASE_URL` 是否配置为企业员工可访问的地址。
-- 确认 `python server.py` 正在运行。
+- 确认 `python3 server.py` 正在运行。
 - 使用内网地址时，确认员工设备与服务器位于同一网络。
 - 如需从公网访问，可使用 ngrok 等内网穿透工具。
 

@@ -42,7 +42,7 @@ def get_recent_decisions(limit: int = 100) -> list:
             if line:
                 try:
                     decisions.append(json.loads(line))
-                except:
+                except json.JSONDecodeError:
                     continue
 
     return decisions[-limit:]
