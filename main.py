@@ -15,8 +15,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import config
-from crawler.base import CollectorBridge, CrawlRunResult
-from crawler.factory import build_collector
+from crawler.mediacrawler_bridge import CrawlRunResult, MediaCrawlerBridge
 from utils.parser import load_articles
 
 
@@ -26,7 +25,6 @@ EXIT_CONFIG = 2
 EXIT_CRAWLER = 3
 EXIT_NO_DATA = 4
 EXIT_NOTIFY = 5
-EXIT_STATE = 6
 
 
 def _is_http_url(value: str) -> bool:
@@ -34,7 +32,7 @@ def _is_http_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
+def validate_runtime_config(bridge: MediaCrawlerBridge) -> List[str]:
     """在爬虫启动前检查完整工作流所需的关键配置。"""
     errors: List[str] = []
 
@@ -182,7 +180,7 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
     return final_items, generated_count
 
 
-def run_workflow(bridge: CollectorBridge) -> int:
+def run_workflow(bridge: MediaCrawlerBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
@@ -216,11 +214,6 @@ def run_workflow(bridge: CollectorBridge) -> int:
     else:
         print("   ℹ️ 无高分文章，跳过推送")
 
-    state_error = bridge.acknowledge()
-    if state_error:
-        print(f"   ❌ 采集状态保存失败: {state_error}")
-        return EXIT_STATE
-
     print("\n" + "=" * 70)
     print("🎉 工作流执行完毕！")
     print("📊 统计：")
@@ -238,7 +231,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check-config",
         action="store_true",
-        help="仅检查运行配置、采集器依赖和本地会话，不启动爬虫",
+        help="仅检查运行配置和 MediaCrawler 版本，不启动爬虫",
     )
     return parser
 
@@ -251,7 +244,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"⏰ 启动时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 70)
 
-    bridge = build_collector()
+    bridge = MediaCrawlerBridge()
     config_errors = validate_runtime_config(bridge)
     if config_errors:
         print("\n❌ 配置检查失败：")

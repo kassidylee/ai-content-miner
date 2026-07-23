@@ -157,22 +157,13 @@ def normalize_article(raw: Dict, platform: str = "") -> Dict:
     )
 
     if isinstance(publish_time, str):
-        try:
-            publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-        except ValueError:
-            for fmt in [
-                "%Y-%m-%d %H:%M",
-                "%Y-%m-%d",
-                "%Y/%m/%d %H:%M",
-                "%Y/%m/%d",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d %H:%M:%S",
-            ]:
-                try:
-                    publish_time = datetime.strptime(publish_time, fmt)
-                    break
-                except ValueError:
-                    continue
+        for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d %H:%M", "%Y/%m/%d",
+                    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ"]:
+            try:
+                publish_time = datetime.strptime(publish_time, fmt)
+                break
+            except ValueError:
+                continue
 
     if isinstance(publish_time, (int, float)):
         try:

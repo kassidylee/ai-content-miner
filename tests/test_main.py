@@ -39,22 +39,6 @@ class MainTest(unittest.TestCase):
 
         self.assertEqual(exit_code, main.EXIT_NO_DATA)
 
-    def test_state_failure_after_processing_returns_nonzero(self):
-        bridge = SimpleNamespace(
-            platform="x",
-            run=lambda: CrawlRunResult(success=True, data_files=("current.jsonl",)),
-            acknowledge=lambda: "state failed",
-        )
-        with patch(
-            "main.load_articles",
-            return_value=[{"title": "X", "content": "body"}],
-        ), patch("main.analyze_articles"), patch(
-            "main.score_articles", return_value=([], 0)
-        ), patch("main.generate_reports", return_value=([], 0)):
-            exit_code = main.run_workflow(bridge)
-
-        self.assertEqual(exit_code, main.EXIT_STATE)
-
 
 if __name__ == "__main__":
     unittest.main()
