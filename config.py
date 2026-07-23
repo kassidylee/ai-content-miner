@@ -42,8 +42,8 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
-# xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ reddit
+# xhs、zhihu 使用 MediaCrawler；x、reddit 使用各自的独立采集器。
 CRAWL_PLATFORM = "xhs"
 
 # 搜索关键词列表
@@ -97,6 +97,26 @@ TWSCRAPE_DB_FILE = os.environ.get(
 )
 TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
+
+# ============================================================
+# 4.3 PRAW（Reddit，只读实验接口）
+# ============================================================
+
+# 本项目直接对齐 PRAW 8.0.2。凭证只从本机环境变量读取，不提交 Git。
+PRAW_EXPECTED_VERSION = "8.0.2"
+REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT", "")
+
+# 默认搜索 r/all。也可以改为 ["MachineLearning", "LocalLLaMA"] 等社区。
+REDDIT_SUBREDDITS = ["all"]
+REDDIT_SEARCH_SORT = "new"
+REDDIT_TIME_FILTER = "week"
+REDDIT_RESULTS_PER_QUERY = 20
+REDDIT_LOOKBACK_HOURS = 168
+REDDIT_REQUEST_TIMEOUT_SECONDS = 30
+REDDIT_STATE_FILE = os.path.join(DATA_DIR, "state", "reddit_seen_ids.json")
+REDDIT_SEEN_ID_LIMIT = 5000
 
 # ============================================================
 # 5. 企业微信推送配置

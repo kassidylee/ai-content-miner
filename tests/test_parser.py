@@ -101,6 +101,41 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["likes"], 19)
         self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
 
+    def test_loads_reddit_fields_without_treating_score_as_likes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_file = Path(temp_dir) / "search_contents_2026-07-23.jsonl"
+            self.write_jsonl(
+                data_file,
+                [{
+                    "id": "abc123",
+                    "title": "Reddit 标题",
+                    "content": "Reddit 正文",
+                    "source": "Reddit",
+                    "url": "https://www.reddit.com/r/test/comments/abc123/example/",
+                    "author": "alice",
+                    "subreddit": "test",
+                    "score": 123,
+                    "upvote_ratio": 0.95,
+                    "comment_count": 8,
+                    "publish_time": "2026-07-23T08:30:00+00:00",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file],
+                    platform="reddit",
+                    allow_manual_fallback=False,
+                )
+
+        self.assertEqual(len(articles), 1)
+        article = articles[0]
+        self.assertEqual(article["source"], "Reddit")
+        self.assertEqual(article["content"], "Reddit 正文")
+        self.assertEqual(article["comments"], 8)
+        self.assertEqual(article["likes"], 0)
+        self.assertEqual(article["raw"]["score"], 123)
+        self.assertEqual(article["raw"]["upvote_ratio"], 0.95)
+
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
