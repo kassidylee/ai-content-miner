@@ -1,0 +1,213 @@
+import json
+import os
+import sqlite3
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from crawler.twscrape_bridge import TwscrapeBridge
+
+
+class FakeAPI:
+    def __init__(self, results):
+        self.results = results
+        self.calls = []
+        self.factory_kwargs = None
+
+    async def search(self, query, limit, kv):
+        self.calls.append((query, limit, kv))
+        result = self.results[query]
+        if isinstance(result, Exception):
+            raise result
+        for tweet in result[:limit]:
+            yield tweet
+
+
+def make_tweet(tweet_id, text, hour, user="alice"):
+    return SimpleNamespace(
+        id=int(tweet_id),
+        id_str=str(tweet_id),
+        url=f"https://x.com/{user}/status/{tweet_id}",
+        date=datetime(2026, 7, 22, hour, tzinfo=timezone.utc),
+        rawContent=text,
+        user=SimpleNamespace(username=user, displayname=user.title()),
+        lang="en",
+        likeCount=12,
+        replyCount=3,
+        retweetCount=4,
+        bookmarkedCount=2,
+        quoteCount=1,
+        viewCount=100,
+    )
+
+
+class TwscrapeBridgeTest(unittest.TestCase):
+    def make_bridge(self, temp_dir, api):
+        def api_factory(**kwargs):
+            api.factory_kwargs = kwargs
+            return api
+
+        bridge = TwscrapeBridge(
+            api_factory=api_factory,
+            now_provider=lambda: datetime(2026, 7, 22, 12, tzinfo=timezone.utc),
+        )
+        root = Path(temp_dir)
+        bridge.configured_platform = "x"
+        bridge.db_file = root / "twscrape.db"
+        bridge.state_file = root / "state" / "seen.json"
+        bridge.target_data_dir = root / "data"
+        bridge.keywords = ["AI", "LLM"]
+        bridge.limit = 3
+        bridge.per_query_limit = 3
+        bridge.lookback_hours = 168
+        bridge.validate = lambda: []
+        return bridge
+
+    def write_session_db(self, path, cookies, active=1):
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "CREATE TABLE accounts "
+                "(username TEXT, active INTEGER, cookies TEXT)"
+            )
+            connection.execute(
+                "INSERT INTO accounts VALUES (?, ?, ?)",
+                ("test-account", active, json.dumps(cookies)),
+            )
+        if os.name != "nt":
+            path.chmod(0o600)
+
+    def test_validate_requires_dependency_and_local_session(self):
+        bridge = TwscrapeBridge()
+        bridge.configured_platform = "x"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge.db_file = Path(temp_dir) / "missing.db"
+            bridge.state_file = Path(temp_dir) / "missing-state.json"
+            with patch(
+                "crawler.twscrape_bridge.importlib.util.find_spec",
+                return_value=None,
+            ):
+                errors = bridge.validate()
+
+        self.assertTrue(any("缺少 twscrape" in error for error in errors))
+        self.assertTrue(any("会话数据库不存在" in error for error in errors))
+
+    def test_validate_reads_active_cookie_account_without_mutating_database(self):
+        bridge = TwscrapeBridge()
+        bridge.configured_platform = "x"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge.db_file = Path(temp_dir) / "session.db"
+            bridge.state_file = Path(temp_dir) / "missing-state.json"
+            self.write_session_db(
+                bridge.db_file,
+                {"auth_token": "test", "ct0": "test"},
+            )
+            errors = bridge.validate()
+
+        self.assertEqual(errors, [])
+
+    def test_validate_rejects_incomplete_cookie_account(self):
+        bridge = TwscrapeBridge()
+        bridge.configured_platform = "x"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge.db_file = Path(temp_dir) / "session.db"
+            bridge.state_file = Path(temp_dir) / "missing-state.json"
+            self.write_session_db(bridge.db_file, {"auth_token": "test"})
+            errors = bridge.validate()
+
+        self.assertTrue(any("缺少 auth_token 或 ct0" in error for error in errors))
+
+    def test_run_uses_real_api_shape_deduplicates_sorts_and_writes_current_run(self):
+        api = FakeAPI(
+            {
+                "AI": [make_tweet("1", "newest", 10), make_tweet("2", "older", 8)],
+                "LLM": [make_tweet("2", "duplicate", 8), make_tweet("4", "middle", 9)],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            result = bridge.run()
+
+            self.assertTrue(result.success)
+            rows = [
+                json.loads(line)
+                for line in result.data_files[0].read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([row["id"] for row in rows], ["1", "4", "2"])
+            self.assertEqual(rows[0]["source"], "X (Twitter)")
+            self.assertEqual(rows[0]["url"], "https://x.com/alice/status/1")
+            self.assertEqual(
+                api.calls,
+                [
+                    ("AI", 3, {"product": "Latest"}),
+                    ("LLM", 3, {"product": "Latest"}),
+                ],
+            )
+            self.assertEqual(api.factory_kwargs["pool"], str(bridge.db_file))
+            self.assertTrue(api.factory_kwargs["raise_when_no_account"])
+            self.assertFalse(bridge.state_file.exists())
+
+            self.assertEqual(bridge.acknowledge(), "")
+            state = json.loads(bridge.state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["seen_ids"], ["1", "4", "2"])
+
+    def test_search_failure_returns_failed_result(self):
+        api = FakeAPI({"AI": RuntimeError("search broke"), "LLM": []})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            result = bridge.run()
+
+        self.assertFalse(result.success)
+        self.assertIn("search broke", result.error)
+
+    def test_seen_ids_are_skipped_and_not_changed_by_collection_only(self):
+        api = FakeAPI(
+            {
+                "AI": [make_tweet("1", "seen", 10), make_tweet("2", "new", 9)],
+                "LLM": [],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            bridge.state_file.parent.mkdir(parents=True)
+            bridge.state_file.write_text(
+                json.dumps({"version": 1, "seen_ids": ["1"]}),
+                encoding="utf-8",
+            )
+            result = bridge.run()
+            rows = [
+                json.loads(line)
+                for line in result.data_files[0].read_text(encoding="utf-8").splitlines()
+            ]
+            state_before_acknowledge = json.loads(
+                bridge.state_file.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual([row["id"] for row in rows], ["2"])
+        self.assertEqual(state_before_acknowledge["seen_ids"], ["1"])
+
+    def test_posts_outside_lookback_window_are_skipped(self):
+        old_tweet = make_tweet("1", "old", 1)
+        old_tweet.date = datetime(2026, 7, 10, tzinfo=timezone.utc)
+        api = FakeAPI(
+            {
+                "AI": [old_tweet, make_tweet("2", "new", 9)],
+                "LLM": [],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            result = bridge.run()
+            rows = [
+                json.loads(line)
+                for line in result.data_files[0].read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual([row["id"] for row in rows], ["2"])
+
+
+if __name__ == "__main__":
+    unittest.main()

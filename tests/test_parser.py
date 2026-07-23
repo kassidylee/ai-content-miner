@@ -72,6 +72,35 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["author"], "作者乙")
         self.assertEqual(article["likes"], 88)
 
+    def test_loads_twscrape_x_fields_and_timezone(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_file = Path(temp_dir) / "search_contents_2026-07-22.jsonl"
+            self.write_jsonl(
+                data_file,
+                [{
+                    "title": "X 标题",
+                    "content": "X 正文",
+                    "source": "X (Twitter)",
+                    "url": "https://x.com/alice/status/1",
+                    "author": "Alice",
+                    "like_count": 19,
+                    "comment_count": 4,
+                    "publish_time": "2026-07-22T08:30:00+00:00",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file], platform="x", allow_manual_fallback=False
+                )
+
+        self.assertEqual(len(articles), 1)
+        article = articles[0]
+        self.assertEqual(article["source"], "X (Twitter)")
+        self.assertEqual(article["content"], "X 正文")
+        self.assertEqual(article["author"], "Alice")
+        self.assertEqual(article["likes"], 19)
+        self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
+
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

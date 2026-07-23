@@ -16,7 +16,7 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 数据爬取 | 基于 MediaCrawler 自动抓取小红书、知乎等平台内容。 |
+| 数据爬取 | 小红书、知乎使用 MediaCrawler；X 可通过实验性的 twscrape 接口进行关键词搜索。 |
 | 智能分析 | 集成 lingzao-skill 风格的内容诊断，包括账号诊断、爆款内容拆解和对标筛选。 |
 | 规则过滤 | 通过字数、关键词和链接检测，快速过滤低质量内容。 |
 | 博主白名单 | 为优质来源增加权重，优先处理可信账号发布的内容。 |
@@ -31,7 +31,7 @@
 
 ### 前置条件
 
-- Python 3.9 或更高版本
+- Python 3.9 或更高版本；使用 X/twscrape 时需要 Python 3.10 或更高版本
 - [uv](https://docs.astral.sh/uv/)（用于安装并运行 MediaCrawler）
 - OpenAI API Key，或兼容接口的 API Key
 - 企业微信机器人 Webhook
@@ -49,9 +49,18 @@ cd ai-content-miner
 python3 -m pip install -r requirements.txt
 ```
 
+也可以用 `uv` 创建项目独立环境，避免影响系统 Python：
+
+```bash
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+```
+
 本项目与 MediaCrawler 使用相互独立的 Python 环境。本项目的
 `requirements.txt` 只安装内容处理和推送依赖；MediaCrawler 依赖由其
 `uv.lock` 管理，避免把两个项目的 Playwright、pandas 等版本混装。
+twscrape 属于本项目依赖，当前固定为 `0.19.2`；其会话数据库和浏览器 Cookie 只保存在
+实际运行任务的电脑上。
 
 ### 3. 配置项目
 
@@ -106,6 +115,42 @@ http://127.0.0.1:8000/reports/
 
 确认报告目录可以正常访问。
 
+### 可选：测试 X 关键词采集
+
+X 不经过 MediaCrawler。本分支使用 `twscrape==0.19.2` 的异步 `API.search()` 接口，
+并把结果转换为项目已有的 JSONL 格式。2026-07-22 已使用一个专用账号完成一次最多
+3 条结果的真实只读烟雾测试，搜索、JSONL 写入和下游解析均成功。该功能仍处于实验阶段；
+一次验证成功不代表 X 非公开接口能够长期稳定。
+
+先在浏览器中正常登录 X，然后打开浏览器开发者工具：
+
+1. 在 Chrome 中按 `⌥⌘I`，打开 **Application**。
+2. 在左侧选择 **Storage → Cookies → https://x.com**。
+3. 分别找到 `auth_token` 和 `ct0`，只复制它们的 **Value**。
+4. 不要把这些值发到聊天、截图或 GitHub；它们代表已登录会话。
+
+运行本地会话创建脚本：
+
+```bash
+.venv/bin/python scripts/setup_twscrape_session.py
+```
+
+脚本只询问 X 用户名、`auth_token` 和 `ct0`，不会询问 X 密码。两个 Cookie 输入均不显示，
+最终只写入 Git 已忽略的 `.local/x/twscrape.db`，并将文件权限设为仅当前用户可读写。
+不同电脑不能通过 Git 同步该数据库，需要各自在本机创建。
+
+随后只测试采集，不调用模型、不生成报告、不发送企业微信：
+
+```bash
+.venv/bin/python scripts/smoke_test_twscrape.py "AI Agent" --limit 3
+```
+
+烟雾测试成功后，才将 `config.py` 中的平台改为：
+
+```python
+CRAWL_PLATFORM = "x"
+```
+
 ### 6. 运行完整工作流
 
 ```bash
@@ -113,7 +158,8 @@ python3 main.py --check-config
 python3 main.py
 ```
 
-`--check-config` 只检查必填配置、MediaCrawler 路径、commit 和运行解释器，
+`--check-config` 只检查必填配置和当前采集器。小红书、知乎会检查 MediaCrawler 路径、
+commit 和运行解释器；X 会检查 twscrape 版本、本地会话数据库和已处理状态，
 不会启动爬虫、调用模型或发送企业微信消息。配置、爬虫退出码、当次无数据或推送
 失败时，主程序均返回非零退出状态。
 
@@ -137,7 +183,13 @@ ai-content-miner/
 │
 ├── crawler/                    # 爬虫模块
 │   ├── __init__.py
-│   └── mediacrawler_bridge.py  # MediaCrawler 调度
+│   ├── base.py                 # 采集器公共结果与接口
+│   ├── factory.py              # 按平台选择采集器
+│   ├── mediacrawler_bridge.py  # MediaCrawler 调度
+│   └── twscrape_bridge.py      # X 关键词搜索与本地去重
+├── scripts/
+│   ├── setup_twscrape_session.py # 创建本地 Cookie 会话
+│   └── smoke_test_twscrape.py    # 只读 X 搜索烟雾测试
 │
 ├── output/                     # 输出模块
 │   ├── __init__.py
@@ -161,7 +213,7 @@ ai-content-miner/
 ## 工作流程
 
 ```text
-MediaCrawler
+MediaCrawler（小红书、知乎）或 twscrape（X，实验）
   -> 本次运行内容文件加载与标准化
   -> lingzao 分析
   -> 规则过滤
@@ -176,6 +228,11 @@ MediaCrawler
 评论数据，因此调用时明确关闭评论抓取。加载器只读取本次运行产生的
 `<type>_contents_<date>.jsonl`，不会递归读取历史输出，也不会把 comments/creators
 误当成文章。
+
+twscrape 同样为每次执行建立独立输出目录，只读取该次搜索返回的数据。它按关键词调用
+`Latest` 搜索，跨关键词按帖子 ID 去重，保留最近 168 小时的内容，再应用总数量上限。
+已处理 ID 仅在完整处理和推送流程成功后写入本地状态；烟雾测试不会确认状态，因此可以
+重复测试同一批帖子。
 
 ## 输出模式
 
@@ -223,18 +280,21 @@ MediaCrawler
 | `SCORE_THRESHOLD` | 评分阈值，达到该分数的内容才会推送 | `6` |
 | `WECOM_WEBHOOK` | 企业微信 Webhook 地址 | `https://qyapi.weixin.qq.com/...` |
 | `REPORT_BASE_URL` | 报告预览服务地址，必须可被员工访问 | `http://127.0.0.1:8000/reports` |
-| `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu` |
+| `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu`、`x` |
 | `SEARCH_KEYWORDS` | 搜索关键词 | `["AI Agent", "大模型"]` |
 | `MEDIACRAWLER_PATH` | MediaCrawler 仓库路径 | `./MediaCrawler` |
 | `MEDIACRAWLER_COMMIT` | 已对齐并校验的 commit | `c9a111b...` |
 | `MEDIACRAWLER_PYTHON` | 未使用 uv 时的 Python >=3.11 解释器，可留空 | `/path/to/python` |
+| `TWSCRAPE_DB_FILE` | X 本地会话数据库，不得提交 | `.local/x/twscrape.db` |
+| `TWSCRAPE_RESULTS_PER_QUERY` | 每个 X 关键词最多读取条数 | `20` |
+| `TWSCRAPE_LOOKBACK_HOURS` | X 帖子的本地时间窗口 | `168` |
 | `BLOGGER_WHITELIST` | 博主白名单及权重 | `{"博主A": {"weight": 1.3}}` |
 | `ENABLE_RETRIEVAL` | 是否启用来源识别 | `True`、`False` |
 
 ## 当前接入边界
 
-- 主流程实际调用 MediaCrawler、当次内容加载、可选 lingzao 分析、规则过滤、AI
-  评分、可选 RAL 来源识别、报告生成和企业微信推送。
+- 主流程按平台实际调用 MediaCrawler 或 twscrape，然后执行当次内容加载、可选 lingzao
+  分析、规则过滤、AI 评分、可选 RAL 来源识别、报告生成和企业微信推送。
 - `ENABLE_LINGZAO_ANALYSIS=False` 或 `ENABLE_RETRIEVAL=False` 时会明确跳过对应步骤，
   不做无效果调用。
 - 原有 lingzao 适配器中两个始终返回空对象、且没有调用方的方法已移除。
@@ -246,6 +306,11 @@ MediaCrawler
   拒绝这两种模式；当前只支持 `search`。
 - 登录方式当前只接入 `qrcode`、`phone`；为避免凭证出现在命令日志或仓库配置中，
   本轮没有接入 cookie 参数。
+- X 仅接入 twscrape 的只读关键词搜索，不包含发帖、点赞、关注、私信、账号池扩容、
+  CAPTCHA 绕过或代理轮换。
+- twscrape 使用非公开 X GraphQL 接口，可能因 X 改版、Cookie 失效、限流或账号验证而
+  中断；任何失败都会返回非零状态，不会显示为采集成功。
+- X 短帖继续使用项目现有的过滤和评分规则，本次实验没有调整筛选与评分体系。
 
 ## 常见问题
 
@@ -303,6 +368,19 @@ MediaCrawler
 - 确认运行环境可以访问 `qyapi.weixin.qq.com`。
 - 查看控制台输出的详细错误信息，系统不会再静默忽略推送错误。
 
+### Q8：为什么 X Cookie 不能提交到 GitHub？
+
+`auth_token` 和 `ct0` 可以代表已登录的 X 会话，泄露后可能被他人直接使用。项目只同步
+采集代码、测试和配置模板；每台实际运行任务的电脑单独创建 `.local/x/twscrape.db`。
+
+### Q9：twscrape 搜索失败怎么办？
+
+- 先运行专用烟雾测试，不要直接启动完整推送流程。
+- 确认复制的是 `auth_token` 和 `ct0` 的 Value，而不是 Cookie 名称或整行文本。
+- Cookie 失效时，手动移走旧数据库，再重新运行会话创建脚本。
+- 如果出现 X 验证、限流或非公开接口变化，应停止重试并重新评估依赖版本。
+- 不要使用个人主账号进行高频测试。
+
 ## 更新日志
 
 ### v1.0.0（2026-07-22）
@@ -324,5 +402,6 @@ MediaCrawler
 ## 致谢
 
 - [MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)：社交媒体爬虫。
+- [twscrape](https://github.com/vladkens/twscrape)：X 非公开 GraphQL 接口的 Python 封装。
 - lingzao-skill：灵造分析能力参考。
 - [OpenAI](https://openai.com/)：提供 LLM 能力支持。
