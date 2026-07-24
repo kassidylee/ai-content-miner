@@ -124,12 +124,6 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
 
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
-    # ----- Twitter/X 使用独立工作流（合伙人实现）-----
-    if getattr(bridge, "platform", "") == "x":
-        from workflows.twitter import run_twitter_workflow
-        return run_twitter_workflow(bridge)
-
-    # ----- 以下为小红书和知乎的新流程（使用四层筛选）-----
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
     if not crawl_result.success:
