@@ -101,6 +101,44 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["likes"], 19)
         self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
 
+    def test_loads_reddit_rss_fields_without_inventing_metrics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_file = Path(temp_dir) / "search_contents_2026-07-24.jsonl"
+            self.write_jsonl(
+                data_file,
+                [{
+                    "id": "abc123",
+                    "title": "Reddit 标题",
+                    "content": "Reddit RSS 正文",
+                    "source": "Reddit",
+                    "url": "https://www.reddit.com/r/test/comments/abc123/example/",
+                    "author": "alice",
+                    "publish_time": "2026-07-24T08:30:00+00:00",
+                    "subreddit": "test",
+                    "score": None,
+                    "upvote_ratio": None,
+                    "comment_count": None,
+                    "metrics_available": False,
+                    "collection_method": "reddit_rss",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file],
+                    platform="reddit",
+                    allow_manual_fallback=False,
+                )
+
+        self.assertEqual(len(articles), 1)
+        article = articles[0]
+        self.assertEqual(article["source"], "Reddit")
+        self.assertEqual(article["content"], "Reddit RSS 正文")
+        self.assertEqual(article["author"], "alice")
+        self.assertEqual(article["likes"], 0)
+        self.assertEqual(article["comments"], 0)
+        self.assertIsNone(article["raw"]["score"])
+        self.assertFalse(article["raw"]["metrics_available"])
+
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
