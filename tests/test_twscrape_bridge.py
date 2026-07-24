@@ -12,14 +12,24 @@ from crawler.twscrape_bridge import TwscrapeBridge
 
 
 class FakeAPI:
-    def __init__(self, results):
+    def __init__(self, results, replies=None):
         self.results = results
+        self.replies = replies or {}
         self.calls = []
+        self.reply_calls = []
         self.factory_kwargs = None
 
     async def search(self, query, limit, kv):
         self.calls.append((query, limit, kv))
         result = self.results[query]
+        if isinstance(result, Exception):
+            raise result
+        for tweet in result[:limit]:
+            yield tweet
+
+    async def tweet_replies(self, tweet_id, limit):
+        self.reply_calls.append((tweet_id, limit))
+        result = self.replies.get(str(tweet_id), [])
         if isinstance(result, Exception):
             raise result
         for tweet in result[:limit]:
@@ -58,6 +68,14 @@ def make_tweet(tweet_id, text, hour, user="alice"):
             )
         ],
     )
+
+
+def make_reply(tweet_id, parent_id, text, likes, user):
+    reply = make_tweet(tweet_id, text, 11, user=user)
+    reply.likeCount = likes
+    reply.inReplyToTweetId = int(parent_id)
+    reply.inReplyToTweetIdStr = str(parent_id)
+    return reply
 
 
 class TwscrapeBridgeTest(unittest.TestCase):
@@ -230,6 +248,74 @@ class TwscrapeBridgeTest(unittest.TestCase):
             ]
 
         self.assertEqual([row["id"] for row in rows], ["2"])
+
+    def test_fetch_comments_normalizes_sorts_and_limits_direct_replies(self):
+        nested_reply = make_reply("13", "99", "nested", 100, "other")
+        empty_reply = make_reply("14", "1", "", 90, "other")
+        api = FakeAPI(
+            {"AI": [], "LLM": []},
+            replies={
+                "1": [
+                    make_reply("11", "1", "low", 2, "reader"),
+                    make_reply("12", "1", "high", 20, "alice"),
+                    nested_reply,
+                    empty_reply,
+                ]
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            results = bridge.fetch_comments(
+                [
+                    {
+                        "id": "x:1",
+                        "platform_item_id": "1",
+                        "username": "alice",
+                    }
+                ],
+                limit=2,
+                timeout_seconds=5,
+            )
+
+        self.assertTrue(results["x:1"].available)
+        self.assertEqual(
+            [comment["id"] for comment in results["x:1"].comments],
+            ["12", "11"],
+        )
+        self.assertTrue(results["x:1"].comments[0]["is_original_author"])
+        self.assertEqual(api.reply_calls, [(1, 2)])
+
+    def test_fetch_comments_isolates_failure_by_tweet(self):
+        api = FakeAPI(
+            {"AI": [], "LLM": []},
+            replies={
+                "1": RuntimeError("unavailable"),
+                "2": [make_reply("21", "2", "reply", 1, "reader")],
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            results = bridge.fetch_comments(
+                [
+                    {
+                        "id": "x:1",
+                        "platform_item_id": "1",
+                        "username": "alice",
+                    },
+                    {
+                        "id": "x:2",
+                        "platform_item_id": "2",
+                        "username": "alice",
+                    },
+                ],
+                limit=20,
+                timeout_seconds=5,
+            )
+
+        self.assertFalse(results["x:1"].available)
+        self.assertNotIn("unavailable", results["x:1"].error)
+        self.assertTrue(results["x:2"].available)
+        self.assertEqual(results["x:2"].comments[0]["id"], "21")
 
 
 if __name__ == "__main__":

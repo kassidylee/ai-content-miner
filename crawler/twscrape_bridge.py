@@ -16,11 +16,21 @@ import sys
 from datetime import datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 from uuid import uuid4
 
 import config
-from crawler.base import CrawlRunResult
+from crawler.base import CommentFetchResult, CrawlRunResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +50,13 @@ def _safe_attr(obj: object, name: str, default: Any = None) -> Any:
         return getattr(obj, name)
     except (AttributeError, KeyError, TypeError, ValueError):
         return default
+
+
+def _safe_nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _extract_links(tweet: object) -> List[Dict[str, str]]:
@@ -239,6 +256,144 @@ class TwscrapeBridge:
             return f"无法保存 twscrape 已处理状态：{exc}"
         self._pending_ids = ()
         return ""
+
+    def fetch_comments(
+        self,
+        items: Sequence[Dict[str, object]],
+        limit: int,
+        timeout_seconds: float,
+    ) -> Dict[str, CommentFetchResult]:
+        """按推文 ID 获取有限数量的直接回复。"""
+        requested: List[Tuple[str, str, str]] = []
+        results: Dict[str, CommentFetchResult] = {}
+        for item in items:
+            item_id = str(item.get("id", "") or "").strip()
+            tweet_id = str(item.get("platform_item_id", "") or "").strip()
+            username = str(item.get("username", "") or "").strip()
+            if not item_id:
+                continue
+            if not tweet_id.isdigit():
+                results[item_id] = CommentFetchResult(
+                    available=False,
+                    error="无效的 X 推文 ID",
+                )
+                continue
+            requested.append((item_id, tweet_id, username))
+
+        if not requested:
+            return results
+
+        try:
+            api = self._make_api()
+            fetched = asyncio.run(
+                self._fetch_comments_for_items(
+                    api,
+                    requested,
+                    limit=max(1, int(limit)),
+                    timeout_seconds=float(timeout_seconds),
+                )
+            )
+        except Exception as exc:
+            error = f"twscrape 回复获取失败：{type(exc).__name__}"
+            for item_id, _tweet_id, _username in requested:
+                results[item_id] = CommentFetchResult(
+                    available=False,
+                    error=error,
+                )
+            return results
+
+        results.update(fetched)
+        return results
+
+    async def _fetch_comments_for_items(
+        self,
+        api: object,
+        requested: Sequence[Tuple[str, str, str]],
+        limit: int,
+        timeout_seconds: float,
+    ) -> Dict[str, CommentFetchResult]:
+        results: Dict[str, CommentFetchResult] = {}
+        for item_id, tweet_id, original_username in requested:
+            try:
+                comments = await asyncio.wait_for(
+                    self._fetch_one_tweet_comments(
+                        api,
+                        tweet_id,
+                        original_username,
+                        limit,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except Exception as exc:
+                results[item_id] = CommentFetchResult(
+                    available=False,
+                    error=f"twscrape 回复获取失败：{type(exc).__name__}",
+                )
+                continue
+            results[item_id] = CommentFetchResult(
+                available=True,
+                comments=tuple(comments),
+            )
+        return results
+
+    async def _fetch_one_tweet_comments(
+        self,
+        api: object,
+        tweet_id: str,
+        original_username: str,
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        comments: List[Dict[str, object]] = []
+        tweet_replies = getattr(api, "tweet_replies")
+        async for reply in tweet_replies(int(tweet_id), limit=limit):
+            content = str(_safe_attr(reply, "rawContent", "") or "").strip()
+            if not content:
+                continue
+
+            in_reply_to = str(
+                _safe_attr(reply, "inReplyToTweetIdStr", None)
+                or _safe_attr(reply, "inReplyToTweetId", "")
+                or ""
+            ).strip()
+            if in_reply_to and in_reply_to != tweet_id:
+                continue
+
+            user = _safe_attr(reply, "user")
+            username = str(_safe_attr(user, "username", "") or "").strip()
+            published_at = _safe_attr(reply, "date")
+            if isinstance(published_at, datetime):
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                published_value = published_at.isoformat()
+            else:
+                published_value = ""
+
+            comments.append(
+                {
+                    "id": str(
+                        _safe_attr(reply, "id_str", None)
+                        or _safe_attr(reply, "id", "")
+                        or ""
+                    ).strip(),
+                    "content": content,
+                    "author_username": username,
+                    "like_count": _safe_nonnegative_int(
+                        _safe_attr(reply, "likeCount", 0)
+                    ),
+                    "published_at": published_value,
+                    "is_original_author": bool(
+                        username
+                        and original_username
+                        and username.casefold() == original_username.casefold()
+                    ),
+                }
+            )
+
+        comments.sort(
+            key=lambda comment: int(comment.get("like_count", 0) or 0),
+            reverse=True,
+        )
+        return comments[:limit]
 
     async def _collect(self) -> List[Dict[str, object]]:
         api = self._make_api()

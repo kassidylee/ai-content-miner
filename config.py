@@ -190,6 +190,48 @@ INTEREST_TOPICS = [
 ]
 
 # ============================================================
+# 4.5 评论区质量筛选
+# ============================================================
+
+# 通用筛选器读取标准评论字段，平台桥接器负责获取并转换原始评论。
+COMMENT_FILTERS = {
+    "default": {
+        "enabled": False,
+        "max_comments": 20,
+        "timeout_seconds": 30,
+        "min_sample_size": 5,
+        "min_critical_authors": 3,
+        "critical_ratio_threshold": 0.4,
+        "weighted_ratio_threshold": 0.6,
+        "strong_critical_authors": 2,
+        "strong_critical_min_likes": 5,
+        "strong_weighted_ratio_threshold": 0.5,
+        "critical_keywords": [],
+        "ignored_username_suffixes": [],
+    },
+    "x": {
+        "enabled": True,
+        "critical_keywords": [
+            "misleading",
+            "incorrect",
+            "fabricated",
+            "fake",
+            "clickbait",
+            "no evidence",
+            "not reproducible",
+            "瞎说",
+            "胡扯",
+            "错误",
+            "造假",
+            "误导",
+            "不可信",
+            "标题党",
+        ],
+        "ignored_username_suffixes": ["bot"],
+    },
+}
+
+# ============================================================
 # 5. 企业微信推送配置
 # ============================================================
 

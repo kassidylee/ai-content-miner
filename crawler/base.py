@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,15 @@ class CrawlRunResult:
     command: Tuple[str, ...] = ()
     output_dir: Optional[Path] = None
     returncode: Optional[int] = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class CommentFetchResult:
+    """单条内容的评论获取结果。"""
+
+    available: bool
+    comments: Tuple[Dict[str, object], ...] = ()
     error: str = ""
 
 
@@ -32,3 +41,15 @@ class CollectorBridge(Protocol):
 
     def acknowledge(self) -> str:
         """在完整工作流成功后确认本次数据，失败时返回错误信息。"""
+
+
+class CommentProvider(Protocol):
+    """平台可选实现的评论获取能力。"""
+
+    def fetch_comments(
+        self,
+        items: Sequence[Dict[str, object]],
+        limit: int,
+        timeout_seconds: float,
+    ) -> Dict[str, CommentFetchResult]:
+        """按统一内容 ID 返回标准化评论。"""
