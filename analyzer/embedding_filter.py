@@ -159,6 +159,24 @@ def _embed_texts(
     return vectors
 
 
+def validate_embedding_config() -> None:
+    """在采集前校验第二层的静态配置。"""
+    mode = str(getattr(config, "EMBEDDING_FILTER_MODE", "")).strip().lower()
+    if mode not in {"shadow", "enforce"}:
+        raise EmbeddingFilterError(
+            "EMBEDDING_FILTER_MODE 只能是 shadow 或 enforce"
+        )
+    if not str(getattr(config, "EMBEDDING_MODEL", "") or "").strip():
+        raise EmbeddingFilterError("EMBEDDING_MODEL 未配置")
+    batch_size = getattr(config, "EMBEDDING_BATCH_SIZE", 0)
+    if not isinstance(batch_size, int) or batch_size <= 0:
+        raise EmbeddingFilterError("EMBEDDING_BATCH_SIZE 必须是正整数")
+    max_chars = getattr(config, "EMBEDDING_MAX_CHARS", 0)
+    if not isinstance(max_chars, int) or max_chars <= 0:
+        raise EmbeddingFilterError("EMBEDDING_MAX_CHARS 必须是正整数")
+    _validate_topics(getattr(config, "INTEREST_TOPICS", []))
+
+
 def apply_embedding_filters(
     items: Iterable[Dict],
     client: Optional[object] = None,

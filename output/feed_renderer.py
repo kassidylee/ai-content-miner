@@ -135,7 +135,7 @@ def _debug_details(item: Dict) -> str:
 
 def _render_card(item: Dict) -> str:
     title = _text(item.get("title") or "无标题")
-    abstract = _text(item.get("abstract") or item.get("content") or "")
+    abstract = _text(item.get("abstract") or "暂无摘要")
     author = _text(item.get("author") or item.get("username") or "未知作者")
     published_at = _text(_format_time(item.get("published_at")))
     source_url = _safe_url(item.get("source_url"))

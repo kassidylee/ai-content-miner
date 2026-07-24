@@ -136,7 +136,7 @@ class EnricherTest(unittest.TestCase):
         self.assertTrue(result["title"].startswith("OpenReasoner"))
         self.assertEqual(
             result["abstract"],
-            "OpenReasoner 发布了新的推理模型和评测结果。 项目代码已经公开。",
+            "OpenReasoner 发布了新的推理模型和评测结果。",
         )
         self.assertEqual(result["enrichment_metadata"]["status"], "fallback")
         self.assertEqual(

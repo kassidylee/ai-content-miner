@@ -41,7 +41,10 @@ def make_bridge(run_result=None, acknowledge=None, with_comments=False):
 
 class MainTest(unittest.TestCase):
     def test_runtime_config_only_requires_wecom_when_enabled(self):
-        bridge = SimpleNamespace(validate=lambda: ["crawler-error"])
+        bridge = SimpleNamespace(
+            platform="x",
+            validate=lambda: ["crawler-error"],
+        )
         with patch.object(main.config, "API_KEY", "real-key"), patch.object(
             main.config,
             "ENABLE_WECOM",
@@ -68,6 +71,17 @@ class MainTest(unittest.TestCase):
             enabled_errors = main.validate_runtime_config(bridge)
 
         self.assertIn("WECOM_WEBHOOK", "\n".join(enabled_errors))
+
+    def test_runtime_config_validates_interest_topics_before_crawl(self):
+        bridge = SimpleNamespace(platform="x", validate=lambda: [])
+        with patch.object(main.config, "API_KEY", "real-key"), patch.object(
+            main.config,
+            "INTEREST_TOPICS",
+            [],
+        ):
+            errors = main.validate_runtime_config(bridge)
+
+        self.assertIn("INTEREST_TOPICS", "\n".join(errors))
 
     def test_crawler_failure_returns_nonzero_and_stops_pipeline(self):
         bridge = make_bridge(

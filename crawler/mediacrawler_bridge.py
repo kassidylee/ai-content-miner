@@ -140,9 +140,9 @@ class MediaCrawlerBridge:
         output_dir = self.target_data_dir / "crawler_runs" / run_id
         command = self.build_command(output_dir)
 
-        print(f"   📡 工作目录: {self.base_path}")
-        print(f"   📂 本次输出: {output_dir}")
-        print(f"   📡 执行: {' '.join(command)}")
+        print(f"工作目录：{self.base_path}")
+        print(f"本次输出：{output_dir}")
+        print(f"执行命令：{' '.join(command)}")
 
         try:
             completed = self._command_runner(

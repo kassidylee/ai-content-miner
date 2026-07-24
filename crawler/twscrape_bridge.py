@@ -171,9 +171,9 @@ class TwscrapeBridge:
         output_file = content_dir / f"search_contents_{datetime.now():%Y-%m-%d}.jsonl"
         self._pending_ids = ()
 
-        print(f"   📡 twscrape 搜索模式: {self.product}")
-        print(f"   📂 本次输出: {output_dir}")
-        print(f"   🔎 搜索关键词: {', '.join(self.keywords)}")
+        print(f"twscrape 搜索模式：{self.product}")
+        print(f"本次输出：{output_dir}")
+        print(f"搜索关键词：{', '.join(self.keywords)}")
 
         try:
             rows = asyncio.run(

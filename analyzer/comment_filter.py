@@ -100,6 +100,11 @@ def _validated_settings(platform: str) -> Dict[str, object]:
     return settings
 
 
+def validate_comment_filter_config(platform: str) -> None:
+    """在采集前校验当前平台的第三层静态配置。"""
+    _validated_settings(platform)
+
+
 def _stage_result(
     decision: str,
     reason_code: str,
@@ -192,9 +197,16 @@ def evaluate_comments(
             {"error": str(fetch_result.error or "")[:160]},
         )
 
+    sampled_comments = sorted(
+        fetch_result.comments,
+        key=lambda comment: _safe_like_count(comment.get("like_count"))
+        if isinstance(comment, dict)
+        else 0,
+        reverse=True,
+    )[: int(settings["max_comments"])]
     comments = _effective_comments(
         item,
-        list(fetch_result.comments)[: int(settings["max_comments"])],
+        sampled_comments,
         settings["ignored_username_suffixes"],
     )
     if not comments:

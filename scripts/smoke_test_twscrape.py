@@ -1,4 +1,4 @@
-"""只测试 twscrape 搜索，不调用模型、生成报告或发送企业微信。"""
+"""只测试 twscrape 搜索，不调用模型、写结构化结果或发送通知。"""
 
 from __future__ import annotations
 

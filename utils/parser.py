@@ -73,7 +73,7 @@ def read_articles_from_folder() -> List[Dict]:
                 "filepath": filepath
             })
         except Exception as e:
-            print(f"   ⚠️ 读取失败: {filename} - {e}")
+            print(f"读取失败：{filename} - {e}")
 
     return articles
 
@@ -376,7 +376,7 @@ def _load_article_file(filepath: Path, articles: List[Dict], platform: str) -> N
                     data = json.loads(line)
                 except json.JSONDecodeError as exc:
                     print(
-                        f"   ⚠️ 跳过无效 JSONL：{filepath.name}:{line_number} - {exc}"
+                        f"跳过无效 JSONL：{filepath.name}:{line_number} - {exc}"
                     )
                     continue
                 if isinstance(data, dict):
@@ -404,24 +404,24 @@ def load_articles(
     for raw_path in data_files or ():
         filepath = Path(raw_path)
         if "_comments_" in filepath.name or "_creators_" in filepath.name:
-            print(f"   ⚠️ 跳过非内容文件: {filepath.name}")
+            print(f"跳过非内容文件：{filepath.name}")
             continue
         if filepath.suffix not in {".json", ".jsonl", ".csv"}:
-            print(f"   ⚠️ 跳过不支持的数据文件: {filepath}")
+            print(f"跳过不支持的数据文件：{filepath}")
             continue
         try:
             _load_article_file(filepath, articles, platform)
         except (OSError, json.JSONDecodeError, csv.Error) as exc:
-            print(f"   ⚠️ 加载失败: {filepath.name} - {exc}")
+            print(f"加载失败：{filepath.name} - {exc}")
 
     if not articles and allow_manual_fallback:
-        print("   ℹ️ 未找到本次爬虫数据，尝试从 ./articles/ 加载手动文章...")
+        print("未找到本次采集数据，尝试从 ./articles/ 加载手动文章")
         articles = read_articles_from_folder()
 
     # 应用本项目下游处理数量限制。
     limit = getattr(config, 'CRAWL_LIMIT', 0)
     if limit > 0 and len(articles) > limit:
-        print(f"   📊 应用数量限制: {len(articles)} → {limit}")
+        print(f"应用数量限制：{len(articles)} -> {limit}")
         articles = articles[:limit]
 
     return articles

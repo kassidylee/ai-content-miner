@@ -35,5 +35,5 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == '__main__':
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"📁 静态服务运行于 http://localhost:{PORT}/reports/")
+        print(f"静态服务运行于 http://localhost:{PORT}/reports/")
         httpd.serve_forever()

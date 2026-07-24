@@ -10,9 +10,19 @@ from typing import Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
 import config
-from analyzer.comment_filter import CommentFilterConfigError
-from analyzer.embedding_filter import EmbeddingFilterError
-from analyzer.enricher import EnrichmentConfigError, enrich_items
+from analyzer.comment_filter import (
+    CommentFilterConfigError,
+    validate_comment_filter_config,
+)
+from analyzer.embedding_filter import (
+    EmbeddingFilterError,
+    validate_embedding_config,
+)
+from analyzer.enricher import (
+    EnrichmentConfigError,
+    enrich_items,
+    validate_enrichment_config,
+)
 from analyzer.pipeline import run_filter_pipeline
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
@@ -67,13 +77,18 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         errors.append("BASE_URL 必须是有效的 http/https URL")
     if not str(getattr(config, "MODEL_NAME", "") or "").strip():
         errors.append("MODEL_NAME 不能为空")
-    if not str(getattr(config, "EMBEDDING_MODEL", "") or "").strip():
-        errors.append("EMBEDDING_MODEL 不能为空")
-    if getattr(config, "EMBEDDING_FILTER_MODE", "") not in {
-        "shadow",
-        "enforce",
-    }:
-        errors.append("EMBEDDING_FILTER_MODE 只能是 shadow 或 enforce")
+    try:
+        validate_embedding_config()
+    except EmbeddingFilterError as exc:
+        errors.append(str(exc))
+    try:
+        validate_comment_filter_config(bridge.platform)
+    except CommentFilterConfigError as exc:
+        errors.append(str(exc))
+    try:
+        validate_enrichment_config()
+    except EnrichmentConfigError as exc:
+        errors.append(str(exc))
 
     if getattr(config, "ENABLE_WECOM", False):
         webhook = getattr(config, "WECOM_WEBHOOK", "")

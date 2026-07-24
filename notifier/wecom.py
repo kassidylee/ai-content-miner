@@ -25,6 +25,17 @@ def _escape_markdown(value: object) -> str:
     return re.sub(r"([\\`*_[\]()#+.!-])", r"\\\1", text)
 
 
+def _markdown_url(value: object) -> str:
+    url = str(value or "").strip()
+    if not _is_http_url(url):
+        return ""
+    return (
+        url.replace(" ", "%20")
+        .replace("(", "%28")
+        .replace(")", "%29")
+    )
+
+
 def validate_config() -> bool:
     """只在通知启用后检查 Webhook。"""
     webhook = str(getattr(config, "WECOM_WEBHOOK", "") or "").strip()
@@ -54,14 +65,14 @@ def _item_lines(index: int, item: Dict) -> List[str]:
     title = _escape_markdown(item.get("title") or "无标题")
     abstract = _escape_markdown(item.get("abstract") or "")
     platform = _escape_markdown(item.get("platform") or "unknown")
-    source_url = str(item.get("source_url", "") or "").strip()
+    source_url = _markdown_url(item.get("source_url"))
     lines = [
         f"**{index}. {title}**",
         f"- 平台：{platform}",
     ]
     if abstract:
         lines.append(f"- 摘要：{abstract}")
-    if _is_http_url(source_url):
+    if source_url:
         lines.append(f"- [查看原帖]({source_url})")
     lines.append("")
     return lines
@@ -85,7 +96,7 @@ def build_markdown(items: List[Dict], platform: Optional[str] = None) -> str:
 
     base_url = str(getattr(config, "REPORT_BASE_URL", "") or "").rstrip("/")
     if platform and _is_http_url(base_url):
-        aggregate = f"{base_url}/{platform}.html"
+        aggregate = _markdown_url(f"{base_url}/{platform}.html")
         candidate = lines + [f"[查看 {platform} 聚合页]({aggregate})"]
         if len("\n".join(candidate).encode("utf-8")) <= MAX_MESSAGE_BYTES:
             lines = candidate

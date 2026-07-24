@@ -15,31 +15,7 @@ BASE_URL = "https://api.openai.com/v1"
 MODEL_NAME = "gpt-4"
 
 # ============================================================
-# 2. 评分与过滤阈值
-# ============================================================
-
-SCORE_THRESHOLD = 6
-SHORT_CONTENT_LIMIT = 500
-MEDIUM_CONTENT_LIMIT = 1500
-MIN_CONTENT_LENGTH = 100
-
-LOW_QUALITY_KEYWORDS = [
-    "求助", "求推荐", "有人知道吗", "想问一下",
-    "萌新", "求问", "有没有人", "在线等", "急求"
-]
-
-# ============================================================
-# 3. 博主白名单
-# ============================================================
-
-BLOGGER_WHITELIST = {
-    "大神A": {"source": "小红书", "weight": 1.3},
-    "量化小咖": {"source": "知乎", "weight": 1.2},
-    "AI研究员B": {"source": "知乎", "weight": 1.4},
-}
-
-# ============================================================
-# 4. 内容采集配置
+# 2. 内容采集配置
 # ============================================================
 
 # 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
@@ -49,10 +25,10 @@ CRAWL_PLATFORM = "x"
 # 搜索关键词列表
 SEARCH_KEYWORDS = [
     "AI Agent",
-    "大模型",
-    "量化投资",
-    "LLM",
-    "强化学习"
+    "大语言模型",
+    "推理模型",
+    "多模态",
+    "AI Infra",
 ]
 
 # 本次运行进入下游流程的总数量上限。
@@ -61,7 +37,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
 # ============================================================
-# 4.1 MediaCrawler（小红书、知乎）
+# 2.1 MediaCrawler（小红书、知乎）
 # ============================================================
 
 MEDIACRAWLER_PATH = os.path.join(PROJECT_ROOT, "MediaCrawler")
@@ -79,7 +55,7 @@ MEDIACRAWLER_TIMEOUT_SECONDS = 900
 CRAWL_TYPE = "search"
 
 # ============================================================
-# 4.2 twscrape（X，实验接口）
+# 2.2 twscrape（X，实验接口）
 # ============================================================
 
 # 本项目直接对齐 PyPI twscrape 0.19.2 的异步 API。
@@ -99,7 +75,7 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
-# 4.3 平台规则筛选
+# 2.3 平台规则筛选
 # ============================================================
 
 # 通用筛选模块只读取标准字段，平台差异通过这里配置。
@@ -136,7 +112,7 @@ PLATFORM_FILTERS = {
 }
 
 # ============================================================
-# 4.4 Embedding 语义筛选
+# 2.4 Embedding 语义筛选
 # ============================================================
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -190,7 +166,7 @@ INTEREST_TOPICS = [
 ]
 
 # ============================================================
-# 4.5 评论区质量筛选
+# 2.5 评论区质量筛选
 # ============================================================
 
 # 通用筛选器读取标准评论字段，平台桥接器负责获取并转换原始评论。
@@ -232,7 +208,7 @@ COMMENT_FILTERS = {
 }
 
 # ============================================================
-# 4.6 极简摘要与分层标签
+# 2.6 极简摘要与分层标签
 # ============================================================
 
 ENRICHER_TITLE_MAX_CHARS = 48
@@ -308,7 +284,7 @@ TAG_TAXONOMY = [
 ]
 
 # ============================================================
-# 5. 企业微信推送配置
+# 3. 企业微信推送配置
 # ============================================================
 
 WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-webhook-key"
@@ -316,44 +292,21 @@ REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
 ENABLE_WECOM = False
 
 # ============================================================
-# 6. RAL 来源识别配置
+# 4. 结构化结果与页面配置
 # ============================================================
 
-ENABLE_RETRIEVAL = True
-
-# 以下为预留配置，暂未实现
-# FETCH_ORIGINAL_CONTENT = True
-# CACHE_EXPIRE_SECONDS = 86400
-
-# ============================================================
-# 7. 日志与输出配置
-# ============================================================
-
-LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
-RADITER_LOG_FILE = os.path.join(LOG_DIR, "raditer.log")
 REPORT_DIR = os.path.join(PROJECT_ROOT, "reports")
 PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
 FEED_RETENTION_DAYS = 30
 FEED_MAX_ITEMS = 200
 FEED_DEBUG_METADATA = False
-LOG_LEVEL = "INFO"
 
 # ============================================================
-# 8. 高级配置
-# ============================================================
-
-SCORE_TEMPERATURE = 0.2
-REPORT_TEMPERATURE = 0.25
-MAX_RETRIES = 3
-REQUEST_INTERVAL = 2
-ENABLE_LINGZAO_ANALYSIS = True
-
-# ============================================================
-# 9. 路径自动创建
+# 5. 路径自动创建
 # ============================================================
 
 def init_directories():
-    dirs = [DATA_DIR, REPORT_DIR, LOG_DIR, ARTICLES_DIR]
+    dirs = [DATA_DIR, REPORT_DIR, ARTICLES_DIR]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
 

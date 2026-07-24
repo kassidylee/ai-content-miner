@@ -60,6 +60,26 @@ def _taxonomy_index() -> Dict[str, Dict[str, object]]:
     return index
 
 
+def validate_enrichment_config() -> None:
+    """在采集前校验摘要长度和受控标签树。"""
+    _taxonomy_index()
+    positive_integer_names = (
+        "ENRICHER_TITLE_MAX_CHARS",
+        "ENRICHER_ABSTRACT_MAX_CHARS",
+        "ENRICHER_INPUT_MAX_CHARS",
+        "ENRICHER_LONG_MESSAGE_CHARS",
+        "ENRICHER_ENTITY_LIMIT",
+        "ENRICHER_MAX_TOKENS",
+    )
+    for name in positive_integer_names:
+        value = getattr(config, name, 0)
+        if not isinstance(value, int) or value <= 0:
+            raise EnrichmentConfigError(f"{name} 必须是正整数")
+    temperature = getattr(config, "ENRICHER_TEMPERATURE", None)
+    if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+        raise EnrichmentConfigError("ENRICHER_TEMPERATURE 必须在 0 到 2 之间")
+
+
 def _embedding_tag_ids(item: Dict) -> List[str]:
     topic_to_tag = {
         str(topic.get("id", "") or ""): str(topic.get("tag_id", "") or "")
@@ -146,7 +166,12 @@ def _limit_abstract(value: object) -> str:
 
 
 def _fallback_abstract(item: Dict) -> str:
-    return _limit_abstract(item.get("content"))
+    text = _clean_text(item.get("content"))
+    if not text:
+        return ""
+    first_sentence = re.split(r"(?<=[。！？!?])\s*|(?<=\.)\s+", text)[0]
+    limit = int(getattr(config, "ENRICHER_ABSTRACT_MAX_CHARS", 180))
+    return first_sentence[:limit].strip()
 
 
 def _extract_json(response: object) -> Dict[str, object]:
