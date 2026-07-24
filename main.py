@@ -36,6 +36,11 @@ def _is_http_url(value: str) -> bool:
 
 def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     """在爬虫启动前检查完整工作流所需的关键配置。"""
+    if getattr(bridge, "platform", "") == "x":
+        from workflows.twitter import validate_twitter_runtime_config
+
+        return validate_twitter_runtime_config(bridge)
+
     errors: List[str] = []
 
     for module_name in ("openai", "requests"):
@@ -184,6 +189,11 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
 
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
+    if getattr(bridge, "platform", "") == "x":
+        from workflows.twitter import run_twitter_workflow
+
+        return run_twitter_workflow(bridge)
+
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
     if not crawl_result.success:
@@ -259,7 +269,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"   - {error}")
         return EXIT_CONFIG
 
-    if "127.0.0.1" in config.REPORT_BASE_URL or "localhost" in config.REPORT_BASE_URL:
+    if (
+        getattr(bridge, "platform", "") != "x"
+        and (
+            "127.0.0.1" in config.REPORT_BASE_URL
+            or "localhost" in config.REPORT_BASE_URL
+        )
+    ):
         print(
             "\n⚠️ REPORT_BASE_URL 为本地地址，企业员工可能无法访问生成的报告"
         )
