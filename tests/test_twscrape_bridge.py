@@ -12,14 +12,24 @@ from crawler.twscrape_bridge import TwscrapeBridge
 
 
 class FakeAPI:
-    def __init__(self, results):
+    def __init__(self, results, replies=None):
         self.results = results
+        self.replies = replies or {}
         self.calls = []
+        self.reply_calls = []
         self.factory_kwargs = None
 
     async def search(self, query, limit, kv):
         self.calls.append((query, limit, kv))
         result = self.results[query]
+        if isinstance(result, Exception):
+            raise result
+        for tweet in result[:limit]:
+            yield tweet
+
+    async def tweet_replies(self, tweet_id, limit):
+        self.reply_calls.append((tweet_id, limit))
+        result = self.replies.get(str(tweet_id), [])
         if isinstance(result, Exception):
             raise result
         for tweet in result[:limit]:
@@ -41,7 +51,31 @@ def make_tweet(tweet_id, text, hour, user="alice"):
         bookmarkedCount=2,
         quoteCount=1,
         viewCount=100,
+        conversationId=int(tweet_id),
+        conversationIdStr=str(tweet_id),
+        inReplyToTweetId=None,
+        inReplyToTweetIdStr=None,
+        retweetedTweet=None,
+        quotedTweet=None,
+        isQuoteStatus=False,
+        possibly_sensitive=False,
+        hashtags=["AI"],
+        links=[
+            SimpleNamespace(
+                url="https://github.com/example/project",
+                text="github.com/example/project",
+                tcourl="https://t.co/example",
+            )
+        ],
     )
+
+
+def make_reply(tweet_id, parent_id, text, likes, user):
+    reply = make_tweet(tweet_id, text, 11, user=user)
+    reply.likeCount = likes
+    reply.inReplyToTweetId = int(parent_id)
+    reply.inReplyToTweetIdStr = str(parent_id)
+    return reply
 
 
 class TwscrapeBridgeTest(unittest.TestCase):
@@ -139,6 +173,11 @@ class TwscrapeBridgeTest(unittest.TestCase):
             self.assertEqual([row["id"] for row in rows], ["1", "4", "2"])
             self.assertEqual(rows[0]["source"], "X (Twitter)")
             self.assertEqual(rows[0]["url"], "https://x.com/alice/status/1")
+            self.assertEqual(rows[2]["matched_keywords"], ["AI", "LLM"])
+            self.assertEqual(
+                rows[0]["referenced_urls"][0]["url"],
+                "https://github.com/example/project",
+            )
             self.assertEqual(
                 api.calls,
                 [
@@ -207,6 +246,43 @@ class TwscrapeBridgeTest(unittest.TestCase):
             ]
 
         self.assertEqual([row["id"] for row in rows], ["2"])
+
+    def test_fetch_replies_normalizes_and_isolates_failure(self):
+        api = FakeAPI(
+            {"AI": [], "LLM": []},
+            replies={
+                "1": RuntimeError("private detail"),
+                "2": [
+                    make_reply("21", "2", "low", 2, "reader"),
+                    make_reply("22", "2", "high", 20, "alice"),
+                ],
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, api)
+            results = bridge.fetch_replies(
+                [
+                    {
+                        "id": "x:1",
+                        "platform_item_id": "1",
+                        "username": "alice",
+                    },
+                    {
+                        "id": "x:2",
+                        "platform_item_id": "2",
+                        "username": "alice",
+                    },
+                ],
+                limit=20,
+                timeout_seconds=5,
+            )
+
+        self.assertFalse(results["x:1"]["available"])
+        self.assertNotIn("private detail", results["x:1"]["error"])
+        self.assertTrue(results["x:2"]["available"])
+        comments = results["x:2"]["comments"]
+        self.assertEqual([comment["id"] for comment in comments], ["22", "21"])
+        self.assertTrue(comments[0]["is_original_author"])
 
 
 if __name__ == "__main__":
