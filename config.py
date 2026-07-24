@@ -18,7 +18,11 @@ MODEL_NAME = "gpt-4"
 # 2. 评分与过滤阈值
 # ============================================================
 
-SCORE_THRESHOLD = 6
+# 四层筛选的原始乘积分数会映射到 0–10；各层均为中性评价时为 6 分。
+SCORE_THRESHOLD = 6.0
+SEMANTIC_DEDUP_THRESHOLD = 0.85
+COMMENT_PASS_THRESHOLD = 0.5
+AUTHOR_PROFILE_THRESHOLD = 0.9
 SHORT_CONTENT_LIMIT = 500
 MEDIUM_CONTENT_LIMIT = 1500
 MIN_CONTENT_LENGTH = 100
@@ -302,7 +306,7 @@ TWITTER_FEED_RETENTION_DAYS = 30
 TWITTER_FEED_MAX_ITEMS = 200
 TWITTER_FEED_DEBUG_METADATA = False
 
-# Twitter 通知独立开关；旧平台继续使用原企业微信配置和行为。
+# Twitter 通知独立开关；非 Twitter 流程继续使用下方企业微信配置。
 TWITTER_ENABLE_WECOM = False
 
 # ============================================================
