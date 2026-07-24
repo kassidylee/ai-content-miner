@@ -408,7 +408,7 @@ def _get_topic_vectors(topics: List[Dict]) -> Tuple[List[Dict], List[List[float]
 
 
 def _build_embedding_text(article: Dict) -> str:
-    """构造 Embedding 输入文本（与 Twitter 方案保持一致）"""
+    """构造 Embedding 输入文本"""
     content = article.get("content", "")
     title = article.get("title", "")
     quoted_content = article.get("quoted_content", "")

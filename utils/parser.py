@@ -1,7 +1,7 @@
 # utils/parser.py
 """
 文章解析工具（唯一权威实现）
-支持：.md 文件解析、MediaCrawler 数据标准化、显式内容文件加载
+支持：.md 文件解析、多采集器数据标准化、显式内容文件加载
 """
 import os
 import re
@@ -77,7 +77,7 @@ def read_articles_from_folder() -> List[Dict]:
     return articles
 
 
-# ---------- MediaCrawler 数据标准化 ----------
+# ---------- 采集器数据标准化 ----------
 def _coerce_count(value: object) -> int:
     if value in (None, ""):
         return 0
@@ -97,10 +97,11 @@ def _coerce_count(value: object) -> int:
 
 
 def normalize_article(raw: Dict, platform: str = "") -> Dict:
-    """将 MediaCrawler xhs/zhihu 内容记录转换为项目统一格式。"""
+    """将各采集器的内容记录转换为项目统一格式。"""
     title = (
         raw.get("title") or raw.get("标题") or raw.get("note_title") or
-        raw.get("name") or raw.get("nickname") or raw.get("display_name") or "无标题"
+        raw.get("full_name") or raw.get("name") or raw.get("nickname") or
+        raw.get("display_name") or "无标题"
     )
 
     content = (
@@ -121,33 +122,38 @@ def normalize_article(raw: Dict, platform: str = "") -> Dict:
     url = (
         raw.get("url") or raw.get("链接") or raw.get("note_url") or
         raw.get("content_url") or raw.get("link") or raw.get("share_url") or
-        raw.get("web_url") or ""
+        raw.get("web_url") or raw.get("html_url") or ""
     )
 
     author = (
         raw.get("author") or raw.get("作者") or raw.get("nickname") or
         raw.get("user_nickname") or raw.get("user_name") or raw.get("username") or
-        raw.get("user_id") or raw.get("uid") or raw.get("author_name") or ""
+        raw.get("user_id") or raw.get("uid") or raw.get("author_name") or
+        (raw.get("owner") or {}).get("login", "") or ""
     )
 
     likes = (
         raw.get("likes") or raw.get("点赞数") or raw.get("like_count") or
         raw.get("liked_count") or raw.get("voteup_count") or raw.get("like_num") or
-        raw.get("like_cnt") or 0
+        raw.get("like_cnt") or raw.get("stars") or
+        raw.get("stargazers_count") or 0
     )
 
     comments = (
         raw.get("comments") or raw.get("评论数") or raw.get("comment_count") or
-        raw.get("comment_num") or raw.get("comment_cnt") or 0
+        raw.get("comment_num") or raw.get("comment_cnt") or
+        raw.get("open_issues") or raw.get("open_issues_count") or 0
     )
 
     collects = (
         raw.get("collects") or raw.get("收藏数") or raw.get("collect_count") or
-        raw.get("collected_count") or 0
+        raw.get("collected_count") or raw.get("forks") or
+        raw.get("forks_count") or 0
     )
 
     shares = (
-        raw.get("shares") or raw.get("分享数") or raw.get("share_count") or 0
+        raw.get("shares") or raw.get("分享数") or raw.get("share_count") or
+        raw.get("watchers") or raw.get("watchers_count") or 0
     )
 
     publish_time = (
@@ -232,6 +238,8 @@ def source_classify(source: str) -> str:
         return "YouTube"
     if "reddit" in source_lower:
         return "Reddit"
+    if "github" in source_lower or "git hub" in source_lower:
+        return "GitHub"
 
     return "未知"
 

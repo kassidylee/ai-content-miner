@@ -101,6 +101,40 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["likes"], 19)
         self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
 
+    def test_loads_github_repository_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_file = Path(temp_dir) / "search_repositories_2026-07-24.jsonl"
+            self.write_jsonl(
+                data_file,
+                [{
+                    "id": "github:1",
+                    "full_name": "example/agent",
+                    "description": "Agent framework",
+                    "source": "GitHub",
+                    "html_url": "https://github.com/example/agent",
+                    "owner": {"login": "example"},
+                    "stargazers_count": 120,
+                    "forks_count": 15,
+                    "watchers_count": 20,
+                    "open_issues_count": 3,
+                    "pushed_at": "2026-07-23T08:30:00Z",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file], platform="github", allow_manual_fallback=False
+                )
+
+        article = articles[0]
+        self.assertEqual(article["title"], "example/agent")
+        self.assertEqual(article["source"], "GitHub")
+        self.assertEqual(article["url"], "https://github.com/example/agent")
+        self.assertEqual(article["author"], "example")
+        self.assertEqual(article["likes"], 120)
+        self.assertEqual(article["collects"], 15)
+        self.assertEqual(article["shares"], 20)
+        self.assertEqual(article["comments"], 3)
+
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

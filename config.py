@@ -10,9 +10,9 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 # 1. LLM API 配置
 # ============================================================
 
-API_KEY = "your-api-key-here"
-BASE_URL = "https://api.openai.com/v1"
-MODEL_NAME = "gpt-4"
+API_KEY = os.environ.get("AI_API_KEY", "")
+BASE_URL = os.environ.get("AI_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.environ.get("AI_MODEL_NAME", "gpt-4")
 
 # ============================================================
 # 2. 评分与过滤阈值
@@ -42,9 +42,9 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
-# xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
-CRAWL_PLATFORM = "xhs"
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）
+# xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
+CRAWL_PLATFORM = "github"
 
 # 搜索关键词列表
 SEARCH_KEYWORDS = [
@@ -61,7 +61,63 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
 # ============================================================
-# 4.1 MediaCrawler（小红书、知乎）
+# 4.0 通用 Embedding 配置
+# ============================================================
+
+# Embedding Key/Base URL 可与聊天模型完全分离；只从环境变量读取。
+EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
+EMBEDDING_BASE_URL = os.environ.get(
+    "EMBEDDING_BASE_URL", "https://api.openai.com/v1"
+)
+EMBEDDING_MODEL = os.environ.get(
+    "EMBEDDING_MODEL", "text-embedding-3-small"
+)
+EMBEDDING_BATCH_SIZE = 50
+EMBEDDING_TIMEOUT_SECONDS = 60
+EMBEDDING_MAX_RETRIES = 2
+
+# ============================================================
+# 4.1 GitHub 仓库搜索
+# ============================================================
+
+# 令牌只从环境变量读取，禁止写入仓库配置或提交到 Git。
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_API_BASE_URL = "https://api.github.com"
+GITHUB_RESULTS_PER_QUERY = 20
+GITHUB_LOOKBACK_DAYS = 7
+GITHUB_MIN_STARS = 0
+GITHUB_TIMEOUT_SECONDS = 30
+GITHUB_README_MAX_CHARS = 6000
+GITHUB_STATE_FILE = os.path.join(DATA_DIR, "state", "github_seen_ids.json")
+GITHUB_SEEN_ID_LIMIT = 5000
+
+# GitHub 专用筛选：仓库规则 -> 搜索关键词 Embedding -> 质量评分。
+GITHUB_RULE_FILTER = {
+    "min_content_chars": 40,
+    "allow_forks": False,
+    "allow_archived": False,
+    "allow_disabled": False,
+    "exclude_keywords": [],
+}
+# Embedding 服务可与聊天服务分离；未单独设置时才回退到通用 LLM 配置。
+GITHUB_EMBEDDING_API_KEY = os.environ.get(
+    "GITHUB_EMBEDDING_API_KEY", EMBEDDING_API_KEY
+)
+GITHUB_EMBEDDING_BASE_URL = os.environ.get(
+    "GITHUB_EMBEDDING_BASE_URL", EMBEDDING_BASE_URL
+)
+GITHUB_EMBEDDING_MODEL = os.environ.get(
+    "GITHUB_EMBEDDING_MODEL", EMBEDDING_MODEL
+)
+GITHUB_EMBEDDING_BATCH_SIZE = 20
+GITHUB_EMBEDDING_MAX_CHARS = 6000
+GITHUB_EMBEDDING_TIMEOUT_SECONDS = 60
+GITHUB_EMBEDDING_MAX_RETRIES = 2
+GITHUB_EMBEDDING_FILTER_MODE = "enforce"  # shadow | enforce
+GITHUB_EMBEDDING_THRESHOLD = 0.35
+GITHUB_QUALITY_MIN_SCORE = 5.0
+# ============================================================
+# 4.2 MediaCrawler（小红书、知乎）
 # ============================================================
 
 MEDIACRAWLER_PATH = os.path.join(PROJECT_ROOT, "MediaCrawler")
@@ -79,7 +135,7 @@ MEDIACRAWLER_TIMEOUT_SECONDS = 900
 CRAWL_TYPE = "search"
 
 # ============================================================
-# 4.2 twscrape（X，实验接口）
+# 4.3 twscrape（X，实验接口）
 # ============================================================
 
 # 本项目直接对齐 PyPI twscrape 0.19.2 的异步 API。
@@ -99,7 +155,7 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
-# 4.3 Twitter 专用结构化处理
+# 4.4 Twitter 专用结构化处理
 # ============================================================
 
 # 这些配置只由 Twitter 新流程读取，不影响小红书和知乎的旧筛选链路。
@@ -281,7 +337,7 @@ TWITTER_ENABLE_WECOM = False
 # 5. 企业微信推送配置
 # ============================================================
 
-WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-webhook-key"
+WECOM_WEBHOOK = os.environ.get("WECOM_WEBHOOK", "")
 REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
 
 # ============================================================
@@ -327,7 +383,7 @@ init_directories()
 # ============================================================
 # 10. Embedding 主题匹配配置
 # ============================================================
-EMBEDDING_MODEL = "your-embedding-model"          # 如 "text-embedding-3-small"
+'# 兼容旧配置名；通用 Embedding 配置在第 4.0 节定义。'
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_MAX_CHARS = 6000
 EMBEDDING_FILTER_MODE = "shadow"                  # shadow | enforce
