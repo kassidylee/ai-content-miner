@@ -313,6 +313,7 @@ TAG_TAXONOMY = [
 
 WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-webhook-key"
 REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
+ENABLE_WECOM = False
 
 # ============================================================
 # 6. RAL 来源识别配置
@@ -331,6 +332,10 @@ ENABLE_RETRIEVAL = True
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 RADITER_LOG_FILE = os.path.join(LOG_DIR, "raditer.log")
 REPORT_DIR = os.path.join(PROJECT_ROOT, "reports")
+PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
+FEED_RETENTION_DAYS = 30
+FEED_MAX_ITEMS = 200
+FEED_DEBUG_METADATA = False
 LOG_LEVEL = "INFO"
 
 # ============================================================
