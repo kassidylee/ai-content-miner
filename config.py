@@ -99,6 +99,185 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
+# 4.3 Twitter 专用结构化处理
+# ============================================================
+
+# 这些配置只由 Twitter 新流程读取，不影响小红书和知乎的旧筛选链路。
+TWITTER_RULE_FILTER = {
+    "allowed_languages": ["zh", "en"],
+    "allow_replies": False,
+    "allow_retweets": False,
+    "allow_quotes": True,
+    "drop_sensitive": True,
+    "min_meaningful_chars": 20,
+    "exclude_keywords": [
+        "airdrop",
+        "giveaway",
+        "casino",
+        "betting",
+        "招聘",
+        "返利",
+        "空投",
+        "博彩",
+    ],
+}
+
+TWITTER_EMBEDDING_MODEL = "text-embedding-3-small"
+TWITTER_EMBEDDING_BATCH_SIZE = 50
+TWITTER_EMBEDDING_MAX_CHARS = 6000
+
+# shadow 只记录低分项；enforce 会删除未达到最高相似主题阈值的内容。
+TWITTER_EMBEDDING_FILTER_MODE = "shadow"
+
+TWITTER_INTEREST_TOPICS = [
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "description": (
+            "AI Agent、智能体框架、工具调用、任务规划、"
+            "多智能体协作、Agent 工作流和相关开源项目"
+        ),
+        "threshold": 0.35,
+        "tag_id": "ai-agent",
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "description": (
+            "大语言模型的复杂推理、思维链、test-time compute、"
+            "数学推理、代码推理和推理模型训练"
+        ),
+        "threshold": 0.35,
+        "tag_id": "reasoning-model",
+    },
+    {
+        "id": "multimodal",
+        "label": "多模态",
+        "description": (
+            "视觉语言模型、语音模型、图像生成、视频生成、"
+            "多模态理解和跨模态推理"
+        ),
+        "threshold": 0.35,
+        "tag_id": "multimodal",
+    },
+    {
+        "id": "ai-infra",
+        "label": "AI Infra",
+        "description": (
+            "大模型训练和推理基础设施、GPU、分布式训练、"
+            "推理加速、模型部署、量化和服务框架"
+        ),
+        "threshold": 0.35,
+        "tag_id": "ai-infra",
+    },
+]
+
+TWITTER_COMMENT_FILTER = {
+    "enabled": True,
+    "max_replies": 20,
+    "timeout_seconds": 30,
+    "min_sample_size": 5,
+    "min_critical_authors": 3,
+    "critical_ratio_threshold": 0.4,
+    "weighted_ratio_threshold": 0.6,
+    "strong_critical_authors": 2,
+    "strong_critical_min_likes": 5,
+    "strong_weighted_ratio_threshold": 0.5,
+    "critical_keywords": [
+        "misleading",
+        "incorrect",
+        "fabricated",
+        "fake",
+        "clickbait",
+        "no evidence",
+        "not reproducible",
+        "瞎说",
+        "胡扯",
+        "错误",
+        "造假",
+        "误导",
+        "不可信",
+        "标题党",
+    ],
+    "ignored_username_suffixes": ["bot"],
+}
+
+TWITTER_TITLE_MAX_CHARS = 48
+TWITTER_ABSTRACT_MAX_CHARS = 180
+TWITTER_ENRICHMENT_INPUT_MAX_CHARS = 6000
+TWITTER_LONG_MESSAGE_CHARS = 500
+TWITTER_ENTITY_LIMIT = 5
+TWITTER_ENRICHMENT_TEMPERATURE = 0.1
+TWITTER_ENRICHMENT_MAX_TOKENS = 600
+
+TWITTER_TAG_TAXONOMY = [
+    {"id": "ai", "label": "AI", "level": 1, "parent_id": None},
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "multimodal",
+        "label": "多模态",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "ai-infra",
+        "label": "AI Infra",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "content-form",
+        "label": "内容形式",
+        "level": 1,
+        "parent_id": None,
+    },
+    {
+        "id": "short-message",
+        "label": "短消息",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "long-message",
+        "label": "长消息",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "paper",
+        "label": "论文",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "project-release",
+        "label": "项目发布",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+]
+
+TWITTER_PROCESSED_FILE = os.path.join(DATA_DIR, "processed", "x.jsonl")
+TWITTER_REPORT_FILE = os.path.join(PROJECT_ROOT, "reports", "x.html")
+TWITTER_FEED_RETENTION_DAYS = 30
+TWITTER_FEED_MAX_ITEMS = 200
+TWITTER_FEED_DEBUG_METADATA = False
+
+# Twitter 通知独立开关；旧平台继续使用原企业微信配置和行为。
+TWITTER_ENABLE_WECOM = False
+
+# ============================================================
 # 5. 企业微信推送配置
 # ============================================================
 
