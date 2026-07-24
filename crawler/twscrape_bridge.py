@@ -16,7 +16,16 @@ import sys
 from datetime import datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 from uuid import uuid4
 
 import config
@@ -40,6 +49,30 @@ def _safe_attr(obj: object, name: str, default: Any = None) -> Any:
         return getattr(obj, name)
     except (AttributeError, KeyError, TypeError, ValueError):
         return default
+
+
+def _safe_nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_links(tweet: object) -> List[Dict[str, str]]:
+    """提取 twscrape 已展开的外部链接。"""
+    links: List[Dict[str, str]] = []
+    for link in _safe_attr(tweet, "links", []) or []:
+        url = str(_safe_attr(link, "url", "") or "").strip()
+        if not url:
+            continue
+        links.append(
+            {
+                "url": url,
+                "label": str(_safe_attr(link, "text", "") or url).strip(),
+                "short_url": str(_safe_attr(link, "tcourl", "") or "").strip(),
+            }
+        )
+    return links
 
 
 class TwscrapeBridge:
@@ -137,9 +170,9 @@ class TwscrapeBridge:
         output_file = content_dir / f"search_contents_{datetime.now():%Y-%m-%d}.jsonl"
         self._pending_ids = ()
 
-        print(f"   📡 twscrape 搜索模式: {self.product}")
-        print(f"   📂 本次输出: {output_dir}")
-        print(f"   🔎 搜索关键词: {', '.join(self.keywords)}")
+        print(f"twscrape 搜索模式：{self.product}")
+        print(f"本次输出：{output_dir}")
+        print(f"搜索关键词：{', '.join(self.keywords)}")
 
         try:
             rows = asyncio.run(
@@ -223,11 +256,154 @@ class TwscrapeBridge:
         self._pending_ids = ()
         return ""
 
+    def fetch_replies(
+        self,
+        items: Sequence[Dict[str, object]],
+        limit: int,
+        timeout_seconds: float,
+    ) -> Dict[str, Dict[str, object]]:
+        """按推文 ID 获取有限数量的直接回复。"""
+        requested: List[Tuple[str, str, str]] = []
+        results: Dict[str, Dict[str, object]] = {}
+        for item in items:
+            item_id = str(item.get("id", "") or "").strip()
+            tweet_id = str(item.get("platform_item_id", "") or "").strip()
+            username = str(item.get("username", "") or "").strip()
+            if not item_id:
+                continue
+            if not tweet_id.isdigit():
+                results[item_id] = {
+                    "available": False,
+                    "comments": [],
+                    "error": "无效的 X 推文 ID",
+                }
+                continue
+            requested.append((item_id, tweet_id, username))
+
+        if not requested:
+            return results
+
+        try:
+            api = self._make_api()
+            fetched = asyncio.run(
+                self._fetch_replies_for_items(
+                    api,
+                    requested,
+                    limit=max(1, int(limit)),
+                    timeout_seconds=float(timeout_seconds),
+                )
+            )
+        except Exception as exc:
+            error = f"twscrape 回复获取失败：{type(exc).__name__}"
+            for item_id, _tweet_id, _username in requested:
+                results[item_id] = {
+                    "available": False,
+                    "comments": [],
+                    "error": error,
+                }
+            return results
+
+        results.update(fetched)
+        return results
+
+    async def _fetch_replies_for_items(
+        self,
+        api: object,
+        requested: Sequence[Tuple[str, str, str]],
+        limit: int,
+        timeout_seconds: float,
+    ) -> Dict[str, Dict[str, object]]:
+        results: Dict[str, Dict[str, object]] = {}
+        for item_id, tweet_id, original_username in requested:
+            try:
+                comments = await asyncio.wait_for(
+                    self._fetch_one_tweet_replies(
+                        api,
+                        tweet_id,
+                        original_username,
+                        limit,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except Exception as exc:
+                results[item_id] = {
+                    "available": False,
+                    "comments": [],
+                    "error": (
+                        f"twscrape 回复获取失败：{type(exc).__name__}"
+                    ),
+                }
+                continue
+            results[item_id] = {
+                "available": True,
+                "comments": comments,
+                "error": "",
+            }
+        return results
+
+    async def _fetch_one_tweet_replies(
+        self,
+        api: object,
+        tweet_id: str,
+        original_username: str,
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        comments: List[Dict[str, object]] = []
+        tweet_replies = getattr(api, "tweet_replies")
+        async for reply in tweet_replies(int(tweet_id), limit=limit):
+            content = str(_safe_attr(reply, "rawContent", "") or "").strip()
+            if not content:
+                continue
+
+            in_reply_to = str(
+                _safe_attr(reply, "inReplyToTweetIdStr", None)
+                or _safe_attr(reply, "inReplyToTweetId", "")
+                or ""
+            ).strip()
+            if in_reply_to and in_reply_to != tweet_id:
+                continue
+
+            user = _safe_attr(reply, "user")
+            username = str(_safe_attr(user, "username", "") or "").strip()
+            published_at = _safe_attr(reply, "date")
+            if isinstance(published_at, datetime):
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                published_value = published_at.isoformat()
+            else:
+                published_value = ""
+
+            comments.append(
+                {
+                    "id": str(
+                        _safe_attr(reply, "id_str", None)
+                        or _safe_attr(reply, "id", "")
+                        or ""
+                    ).strip(),
+                    "content": content,
+                    "author_username": username,
+                    "like_count": _safe_nonnegative_int(
+                        _safe_attr(reply, "likeCount", 0)
+                    ),
+                    "published_at": published_value,
+                    "is_original_author": bool(
+                        username
+                        and original_username
+                        and username.casefold() == original_username.casefold()
+                    ),
+                }
+            )
+
+        comments.sort(
+            key=lambda comment: int(comment.get("like_count", 0) or 0),
+            reverse=True,
+        )
+        return comments[:limit]
+
     async def _collect(self) -> List[Dict[str, object]]:
         api = self._make_api()
         seen_ids = set(self._load_seen_ids())
-        current_ids: Set[str] = set()
-        collected: List[Tuple[float, Dict[str, object]]] = []
+        collected: Dict[str, Tuple[float, Dict[str, object]]] = {}
         cutoff = self._now_provider() - timedelta(hours=float(self.lookback_hours))
 
         for keyword in self.keywords:
@@ -236,14 +412,18 @@ class TwscrapeBridge:
                 if row is None:
                     continue
                 tweet_id = str(row["id"])
-                if tweet_id in seen_ids or tweet_id in current_ids:
+                if tweet_id in seen_ids:
                     continue
-                current_ids.add(tweet_id)
                 sort_time = float(row.pop("_sort_time"))
-                collected.append((sort_time, row))
+                if tweet_id in collected:
+                    matched_keywords = collected[tweet_id][1]["matched_keywords"]
+                    if keyword not in matched_keywords:
+                        matched_keywords.append(keyword)
+                    continue
+                collected[tweet_id] = (sort_time, row)
 
-        collected.sort(key=lambda item: item[0], reverse=True)
-        return [row for _, row in collected[: self.limit]]
+        ordered = sorted(collected.values(), key=lambda item: item[0], reverse=True)
+        return [row for _, row in ordered[: self.limit]]
 
     async def _search_keyword(
         self, api: object, keyword: str
@@ -290,12 +470,40 @@ class TwscrapeBridge:
             url_user = username or "i/web"
             url = f"https://x.com/{url_user}/status/{tweet_id}"
 
+        quoted_tweet = _safe_attr(tweet, "quotedTweet")
+        quoted_content = str(
+            _safe_attr(quoted_tweet, "rawContent", "") or ""
+        ).strip()
+        in_reply_to = str(
+            _safe_attr(tweet, "inReplyToTweetIdStr", None)
+            or _safe_attr(tweet, "inReplyToTweetId", "")
+            or ""
+        ).strip()
+        conversation_id = str(
+            _safe_attr(tweet, "conversationIdStr", None)
+            or _safe_attr(tweet, "conversationId", "")
+            or tweet_id
+        ).strip()
+        hashtags = [
+            str(tag).strip()
+            for tag in (_safe_attr(tweet, "hashtags", []) or [])
+            if str(tag).strip()
+        ]
+        is_retweet = _safe_attr(tweet, "retweetedTweet") is not None
+        is_quote = bool(
+            quoted_tweet is not None
+            or _safe_attr(tweet, "isQuoteStatus", False)
+        )
+
         return {
             "id": tweet_id,
             "title": title_line[:80],
             "content": content,
+            "quoted_content": quoted_content,
             "source": "X (Twitter)",
             "url": url,
+            "source_url": url,
+            "referenced_urls": _extract_links(tweet),
             "author": author,
             "username": username,
             "publish_time": published_at.isoformat(),
@@ -307,6 +515,19 @@ class TwscrapeBridge:
             "quote_count": _safe_attr(tweet, "quoteCount", 0) or 0,
             "view_count": _safe_attr(tweet, "viewCount", 0) or 0,
             "search_keyword": keyword,
+            "matched_keywords": [keyword],
+            "platform_metadata": {
+                "lang": str(_safe_attr(tweet, "lang", "") or ""),
+                "hashtags": hashtags,
+                "is_reply": bool(in_reply_to),
+                "in_reply_to_id": in_reply_to,
+                "is_retweet": is_retweet,
+                "is_quote": is_quote,
+                "possibly_sensitive": bool(
+                    _safe_attr(tweet, "possibly_sensitive", False)
+                ),
+                "conversation_id": conversation_id,
+            },
             "_sort_time": published_at.timestamp(),
         }
 
