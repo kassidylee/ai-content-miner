@@ -136,6 +136,60 @@ PLATFORM_FILTERS = {
 }
 
 # ============================================================
+# 4.4 Embedding 语义筛选
+# ============================================================
+
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_BATCH_SIZE = 50
+EMBEDDING_MAX_CHARS = 6000
+
+# shadow 只记录低分项；enforce 会正式删除所有主题均未达标的内容。
+EMBEDDING_FILTER_MODE = "shadow"
+
+INTEREST_TOPICS = [
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "description": (
+            "AI Agent、智能体框架、工具调用、任务规划、"
+            "多智能体协作、Agent 工作流和相关开源项目"
+        ),
+        "threshold": 0.35,
+        "tag_id": "ai-agent",
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "description": (
+            "大语言模型的复杂推理、思维链、test-time compute、"
+            "数学推理、代码推理和推理模型训练"
+        ),
+        "threshold": 0.35,
+        "tag_id": "reasoning-model",
+    },
+    {
+        "id": "multimodal",
+        "label": "多模态",
+        "description": (
+            "视觉语言模型、语音模型、图像生成、视频生成、"
+            "多模态理解和跨模态推理"
+        ),
+        "threshold": 0.35,
+        "tag_id": "multimodal",
+    },
+    {
+        "id": "ai-infra",
+        "label": "AI Infra",
+        "description": (
+            "大模型训练和推理基础设施、GPU、分布式训练、"
+            "推理加速、模型部署、量化和服务框架"
+        ),
+        "threshold": 0.35,
+        "tag_id": "ai-infra",
+    },
+]
+
+# ============================================================
 # 5. 企业微信推送配置
 # ============================================================
 
