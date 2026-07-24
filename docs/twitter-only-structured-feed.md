@@ -1,5 +1,8 @@
 # Twitter 独立结构化信息流方案
 
+> 本文记录最初的结构化信息流设计。当前实际筛选规则、技术评分、互动门槛和
+> Embedding 开关请以 [`twitter-filtering.md`](twitter-filtering.md) 为准。
+
 ## 1. 改造边界
 
 本次改造只作用于 Twitter/X。
