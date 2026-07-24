@@ -41,6 +41,22 @@ def make_tweet(tweet_id, text, hour, user="alice"):
         bookmarkedCount=2,
         quoteCount=1,
         viewCount=100,
+        conversationId=int(tweet_id),
+        conversationIdStr=str(tweet_id),
+        inReplyToTweetId=None,
+        inReplyToTweetIdStr=None,
+        retweetedTweet=None,
+        quotedTweet=None,
+        isQuoteStatus=False,
+        possibly_sensitive=False,
+        hashtags=["AI"],
+        links=[
+            SimpleNamespace(
+                url="https://github.com/example/project",
+                text="github.com/example/project",
+                tcourl="https://t.co/example",
+            )
+        ],
     )
 
 
@@ -139,6 +155,13 @@ class TwscrapeBridgeTest(unittest.TestCase):
             self.assertEqual([row["id"] for row in rows], ["1", "4", "2"])
             self.assertEqual(rows[0]["source"], "X (Twitter)")
             self.assertEqual(rows[0]["url"], "https://x.com/alice/status/1")
+            self.assertEqual(rows[2]["matched_keywords"], ["AI", "LLM"])
+            self.assertEqual(
+                rows[0]["referenced_urls"][0]["url"],
+                "https://github.com/example/project",
+            )
+            self.assertFalse(rows[0]["platform_metadata"]["is_reply"])
+            self.assertFalse(rows[0]["platform_metadata"]["is_retweet"])
             self.assertEqual(
                 api.calls,
                 [

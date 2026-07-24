@@ -83,9 +83,22 @@ class ParserTest(unittest.TestCase):
                     "source": "X (Twitter)",
                     "url": "https://x.com/alice/status/1",
                     "author": "Alice",
+                    "username": "alice",
+                    "id": "1",
                     "like_count": 19,
                     "comment_count": 4,
                     "publish_time": "2026-07-22T08:30:00+00:00",
+                    "referenced_urls": [
+                        {
+                            "url": "https://github.com/example/project",
+                            "label": "example/project",
+                        }
+                    ],
+                    "matched_keywords": ["AI Agent", "LLM"],
+                    "platform_metadata": {
+                        "lang": "en",
+                        "is_reply": False,
+                    },
                 }],
             )
             with patch("utils.parser.config.CRAWL_LIMIT", 20):
@@ -99,6 +112,17 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["content"], "X 正文")
         self.assertEqual(article["author"], "Alice")
         self.assertEqual(article["likes"], 19)
+        self.assertEqual(article["id"], "x:1")
+        self.assertEqual(article["platform"], "x")
+        self.assertEqual(article["source_url"], "https://x.com/alice/status/1")
+        self.assertEqual(article["metrics"]["reply_count"], 4)
+        self.assertEqual(
+            article["referenced_urls"][0]["domain"], "github.com"
+        )
+        self.assertEqual(
+            article["platform_metadata"]["matched_keywords"],
+            ["AI Agent", "LLM"],
+        )
         self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
 
     def test_ignores_comment_files_and_does_not_scan_history(self):

@@ -10,6 +10,7 @@ import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Union
+from urllib.parse import urlparse
 
 import config
 
@@ -96,8 +97,48 @@ def _coerce_count(value: object) -> int:
         return 0
 
 
+def _platform_key(platform: str, source: str) -> str:
+    """把平台别名转换为稳定的内部键。"""
+    value = (platform or source).strip().lower()
+    if value in {"x", "twitter", "x.com"} or "twitter" in value:
+        return "x"
+    if value in {"xhs", "xiaohongshu"} or "小红书" in value:
+        return "xhs"
+    if value == "zhihu" or "知乎" in value:
+        return "zhihu"
+    return value or "unknown"
+
+
+def _normalize_referenced_urls(raw_urls: object) -> List[Dict[str, str]]:
+    """统一采集器提供的外部链接结构。"""
+    normalized: List[Dict[str, str]] = []
+    if not isinstance(raw_urls, list):
+        return normalized
+
+    for entry in raw_urls:
+        if isinstance(entry, str):
+            url = entry.strip()
+            label = url
+        elif isinstance(entry, dict):
+            url = str(entry.get("url", "") or "").strip()
+            label = str(entry.get("label", "") or url).strip()
+        else:
+            continue
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        normalized.append(
+            {
+                "url": url,
+                "label": label,
+                "domain": parsed.netloc.lower(),
+            }
+        )
+    return normalized
+
+
 def normalize_article(raw: Dict, platform: str = "") -> Dict:
-    """将 MediaCrawler xhs/zhihu 内容记录转换为项目统一格式。"""
+    """将各平台采集记录转换为下游统一格式。"""
     title = (
         raw.get("title") or raw.get("标题") or raw.get("note_title") or
         raw.get("name") or raw.get("nickname") or raw.get("display_name") or "无标题"
@@ -189,17 +230,67 @@ def normalize_article(raw: Dict, platform: str = "") -> Dict:
     if normalized_source == "未知" and source and source != "未知":
         normalized_source = str(source)
 
+    platform_key = _platform_key(platform, str(source))
+    platform_item_id = str(
+        raw.get("platform_item_id")
+        or raw.get("id")
+        or raw.get("note_id")
+        or raw.get("content_id")
+        or ""
+    ).strip()
+    source_url = str(raw.get("source_url") or url or "").strip()
+    referenced_urls = _normalize_referenced_urls(raw.get("referenced_urls", []))
+    platform_metadata = raw.get("platform_metadata")
+    if not isinstance(platform_metadata, dict):
+        platform_metadata = {}
+    platform_metadata = dict(platform_metadata)
+    platform_metadata.setdefault("lang", str(raw.get("lang", "") or ""))
+    platform_metadata.setdefault(
+        "matched_keywords",
+        list(raw.get("matched_keywords", []))
+        if isinstance(raw.get("matched_keywords"), list)
+        else ([raw["search_keyword"]] if raw.get("search_keyword") else []),
+    )
+
+    metrics = {
+        "like_count": _coerce_count(likes),
+        "reply_count": _coerce_count(comments),
+        "share_count": _coerce_count(shares),
+        "bookmark_count": _coerce_count(collects),
+        "quote_count": _coerce_count(raw.get("quote_count", 0)),
+        "view_count": _coerce_count(raw.get("view_count", 0)),
+    }
+
     return {
+        "id": f"{platform_key}:{platform_item_id}" if platform_item_id else "",
+        "platform_item_id": platform_item_id,
+        "platform": platform_key,
         "title": str(title) if title else "无标题",
         "content": str(content) if content else "",
+        "quoted_content": str(raw.get("quoted_content", "") or ""),
+        "abstract": "",
+        "tags": [],
         "source": normalized_source,
-        "url": str(url) if url else "",
+        "source_url": source_url,
+        "referenced_urls": referenced_urls,
+        "url": source_url,
+        "published_at": publish_time,
         "publish_time": publish_time,
         "author": str(author) if author else "",
-        "likes": _coerce_count(likes),
-        "comments": _coerce_count(comments),
-        "collects": _coerce_count(collects),
-        "shares": _coerce_count(shares),
+        "username": str(raw.get("username", "") or ""),
+        "metrics": metrics,
+        "platform_metadata": platform_metadata,
+        "filter_metadata": {
+            "stages": [],
+            "final_decision": "pending",
+            "final_reason_codes": [],
+        },
+        "processed_at": None,
+        # 以下字段暂时保留，兼容尚未迁移的旧处理模块。
+        "likes": metrics["like_count"],
+        "comments": metrics["reply_count"],
+        "collects": metrics["bookmark_count"],
+        "shares": metrics["share_count"],
         "raw": raw
     }
 

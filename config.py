@@ -44,7 +44,7 @@ BLOGGER_WHITELIST = {
 
 # 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
 # xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
-CRAWL_PLATFORM = "xhs"
+CRAWL_PLATFORM = "x"
 
 # 搜索关键词列表
 SEARCH_KEYWORDS = [
@@ -97,6 +97,43 @@ TWSCRAPE_DB_FILE = os.environ.get(
 )
 TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
+
+# ============================================================
+# 4.3 平台规则筛选
+# ============================================================
+
+# 通用筛选模块只读取标准字段，平台差异通过这里配置。
+PLATFORM_FILTERS = {
+    "default": {
+        "allowed_languages": [],
+        "allow_replies": True,
+        "allow_retweets": True,
+        "allow_quotes": True,
+        "drop_sensitive": False,
+        "min_meaningful_chars": 1,
+        "require_platform_id": False,
+        "exclude_keywords": [],
+    },
+    "x": {
+        "allowed_languages": ["zh", "en"],
+        "allow_replies": False,
+        "allow_retweets": False,
+        "allow_quotes": True,
+        "drop_sensitive": True,
+        "min_meaningful_chars": 20,
+        "require_platform_id": True,
+        "exclude_keywords": [
+            "airdrop",
+            "giveaway",
+            "casino",
+            "betting",
+            "招聘",
+            "返利",
+            "空投",
+            "博彩",
+        ],
+    },
+}
 
 # ============================================================
 # 5. 企业微信推送配置

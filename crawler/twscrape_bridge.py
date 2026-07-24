@@ -42,6 +42,23 @@ def _safe_attr(obj: object, name: str, default: Any = None) -> Any:
         return default
 
 
+def _extract_links(tweet: object) -> List[Dict[str, str]]:
+    """提取 twscrape 已展开的外部链接。"""
+    links: List[Dict[str, str]] = []
+    for link in _safe_attr(tweet, "links", []) or []:
+        url = str(_safe_attr(link, "url", "") or "").strip()
+        if not url:
+            continue
+        links.append(
+            {
+                "url": url,
+                "label": str(_safe_attr(link, "text", "") or url).strip(),
+                "short_url": str(_safe_attr(link, "tcourl", "") or "").strip(),
+            }
+        )
+    return links
+
+
 class TwscrapeBridge:
     """校验本地会话、搜索 X，并输出本次运行的标准 JSONL。"""
 
@@ -226,8 +243,7 @@ class TwscrapeBridge:
     async def _collect(self) -> List[Dict[str, object]]:
         api = self._make_api()
         seen_ids = set(self._load_seen_ids())
-        current_ids: Set[str] = set()
-        collected: List[Tuple[float, Dict[str, object]]] = []
+        collected: Dict[str, Tuple[float, Dict[str, object]]] = {}
         cutoff = self._now_provider() - timedelta(hours=float(self.lookback_hours))
 
         for keyword in self.keywords:
@@ -236,14 +252,18 @@ class TwscrapeBridge:
                 if row is None:
                     continue
                 tweet_id = str(row["id"])
-                if tweet_id in seen_ids or tweet_id in current_ids:
+                if tweet_id in seen_ids:
                     continue
-                current_ids.add(tweet_id)
                 sort_time = float(row.pop("_sort_time"))
-                collected.append((sort_time, row))
+                if tweet_id in collected:
+                    matched_keywords = collected[tweet_id][1]["matched_keywords"]
+                    if keyword not in matched_keywords:
+                        matched_keywords.append(keyword)
+                    continue
+                collected[tweet_id] = (sort_time, row)
 
-        collected.sort(key=lambda item: item[0], reverse=True)
-        return [row for _, row in collected[: self.limit]]
+        ordered = sorted(collected.values(), key=lambda item: item[0], reverse=True)
+        return [row for _, row in ordered[: self.limit]]
 
     async def _search_keyword(
         self, api: object, keyword: str
@@ -290,12 +310,40 @@ class TwscrapeBridge:
             url_user = username or "i/web"
             url = f"https://x.com/{url_user}/status/{tweet_id}"
 
+        quoted_tweet = _safe_attr(tweet, "quotedTweet")
+        quoted_content = str(
+            _safe_attr(quoted_tweet, "rawContent", "") or ""
+        ).strip()
+        in_reply_to = str(
+            _safe_attr(tweet, "inReplyToTweetIdStr", None)
+            or _safe_attr(tweet, "inReplyToTweetId", "")
+            or ""
+        ).strip()
+        conversation_id = str(
+            _safe_attr(tweet, "conversationIdStr", None)
+            or _safe_attr(tweet, "conversationId", "")
+            or tweet_id
+        ).strip()
+        hashtags = [
+            str(tag).strip()
+            for tag in (_safe_attr(tweet, "hashtags", []) or [])
+            if str(tag).strip()
+        ]
+        is_retweet = _safe_attr(tweet, "retweetedTweet") is not None
+        is_quote = bool(
+            quoted_tweet is not None
+            or _safe_attr(tweet, "isQuoteStatus", False)
+        )
+
         return {
             "id": tweet_id,
             "title": title_line[:80],
             "content": content,
+            "quoted_content": quoted_content,
             "source": "X (Twitter)",
             "url": url,
+            "source_url": url,
+            "referenced_urls": _extract_links(tweet),
             "author": author,
             "username": username,
             "publish_time": published_at.isoformat(),
@@ -307,6 +355,19 @@ class TwscrapeBridge:
             "quote_count": _safe_attr(tweet, "quoteCount", 0) or 0,
             "view_count": _safe_attr(tweet, "viewCount", 0) or 0,
             "search_keyword": keyword,
+            "matched_keywords": [keyword],
+            "platform_metadata": {
+                "lang": str(_safe_attr(tweet, "lang", "") or ""),
+                "hashtags": hashtags,
+                "is_reply": bool(in_reply_to),
+                "in_reply_to_id": in_reply_to,
+                "is_retweet": is_retweet,
+                "is_quote": is_quote,
+                "possibly_sensitive": bool(
+                    _safe_attr(tweet, "possibly_sensitive", False)
+                ),
+                "conversation_id": conversation_id,
+            },
             "_sort_time": published_at.timestamp(),
         }
 
