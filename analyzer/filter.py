@@ -22,6 +22,14 @@ import config
 AUTHOR_PROFILE_THRESHOLD = getattr(config, 'AUTHOR_PROFILE_THRESHOLD', 0.9)
 COMMENT_PASS_THRESHOLD = getattr(config, 'COMMENT_PASS_THRESHOLD', 0.5)
 SEMANTIC_DEDUP_THRESHOLD = getattr(config, 'SEMANTIC_DEDUP_THRESHOLD', 0.85)
+# ============================================================
+# Embedding 主题匹配配置
+# ============================================================
+EMBEDDING_MODEL = getattr(config, 'EMBEDDING_MODEL', '')
+EMBEDDING_BATCH_SIZE = getattr(config, 'EMBEDDING_BATCH_SIZE', 50)
+EMBEDDING_MAX_CHARS = getattr(config, 'EMBEDDING_MAX_CHARS', 6000)
+EMBEDDING_FILTER_MODE = getattr(config, 'EMBEDDING_FILTER_MODE', 'shadow')  # shadow | enforce
+INTEREST_TOPICS = getattr(config, 'INTEREST_TOPICS', [])
 
 RULE_SCORE_MIN = 0.5
 RULE_SCORE_MAX = 1.3
@@ -405,6 +413,199 @@ def semantic_filter(
 
     return result
 
+# ============================================================
+# Embedding 兴趣主题匹配
+# ============================================================
+
+class EmbeddingFilterError(Exception):
+    """Embedding 主题匹配异常"""
+    pass
+
+
+def _get_topic_vectors(topics: List[Dict]) -> Tuple[List[Dict], List[List[float]]]:
+    """获取所有主题描述的向量（只生成一次）"""
+    from utils.embedding import encode
+    
+    topic_vectors = []
+    for topic in topics:
+        desc = topic.get("description", "").strip()
+        if not desc:
+            continue
+        vec = encode([desc])[0]
+        topic_vectors.append({
+            "id": topic["id"],
+            "label": topic["label"],
+            "threshold": topic["threshold"],
+            "tag_id": topic.get("tag_id", topic["id"]),
+            "vector": vec
+        })
+    return topic_vectors
+
+
+def _build_embedding_text(article: Dict) -> str:
+    """构造 Embedding 输入文本（与 Twitter 方案保持一致）"""
+    content = article.get("content", "")
+    title = article.get("title", "")
+    quoted_content = article.get("quoted_content", "")
+    
+    # 提取链接域名
+    links = article.get("links", [])
+    domains = []
+    for link in links:
+        if isinstance(link, dict):
+            domain = link.get("domain", "")
+        elif isinstance(link, str):
+            from urllib.parse import urlparse
+            parsed = urlparse(link)
+            domain = parsed.netloc
+        else:
+            continue
+        if domain:
+            domains.append(domain)
+    
+    parts = [title, content, quoted_content] + domains
+    text = " ".join([p for p in parts if p])
+    
+    # 清理多余空白
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # 限制长度
+    if len(text) > EMBEDDING_MAX_CHARS:
+        text = text[:EMBEDDING_MAX_CHARS]
+    
+    return text
+
+
+def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    """计算余弦相似度"""
+    import math
+    
+    if not vec_a or not vec_b:
+        return 0.0
+    
+    if len(vec_a) != len(vec_b):
+        raise EmbeddingFilterError("向量维度不一致")
+    
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    
+    return dot / (norm_a * norm_b)
+
+
+def topic_embedding_filter(
+    article: Dict,
+    mode: str = None,
+    topics: List[Dict] = None,
+    model: str = None
+) -> FilterResult:
+    """
+    兴趣主题匹配（第二层）
+    
+    将文章与配置的 INTEREST_TOPICS 进行语义相似度比较，
+    任一主题达到阈值即通过。
+    """
+    result = FilterResult()
+    
+    # 获取配置
+    if mode is None:
+        mode = getattr(config, 'EMBEDDING_FILTER_MODE', 'shadow')
+    if topics is None:
+        topics = getattr(config, 'INTEREST_TOPICS', [])
+    if model is None:
+        model = getattr(config, 'EMBEDDING_MODEL', '')
+    
+    # 配置检查
+    if not model:
+        result.semantic_reason = "EMBEDDING_MODEL 未配置，跳过"
+        return result
+    
+    if not topics:
+        result.semantic_reason = "INTEREST_TOPICS 未配置，跳过"
+        return result
+    
+    # 检查必要导入
+    try:
+        from utils.embedding import encode
+    except ImportError:
+        result.semantic_reason = "embedding 模块不可用，跳过"
+        return result
+    
+    # 构造输入文本
+    text = _build_embedding_text(article)
+    if not text or len(text.strip()) < 10:
+        result.semantic_reason = "文本内容过少，跳过"
+        if mode == "enforce":
+            result.semantic_passed = False
+            result.passed = False
+            result.flags.append("embedding_empty_text")
+        else:
+            result.flags.append("embedding_shadow_drop")
+        return result
+    
+    # 获取文章向量
+    try:
+        article_vec = encode([text])[0]
+    except Exception as e:
+        raise EmbeddingFilterError(f"Embedding API 调用失败: {e}")
+    
+    # 获取主题向量（缓存）
+    topic_vectors = _get_topic_vectors(topics)
+    if not topic_vectors:
+        result.semantic_reason = "无有效主题，跳过"
+        return result
+    
+    # 计算所有主题相似度
+    scores = {}
+    matched_topics = []
+    best_topic = None
+    best_score = 0.0
+    
+    for tv in topic_vectors:
+        sim = _cosine_similarity(article_vec, tv["vector"])
+        scores[tv["id"]] = round(sim, 4)
+        
+        if sim >= tv["threshold"]:
+            matched_topics.append(tv["id"])
+            if sim > best_score:
+                best_score = sim
+                best_topic = tv["id"]
+        else:
+            if sim > best_score:
+                best_score = sim
+                best_topic = tv["id"]
+    
+    # 判断是否通过
+    passed = len(matched_topics) > 0
+    result.semantic_score = min(1.3, 1.0 + best_score * 0.3)
+    
+    # 生成元数据
+    result.semantic_reason = f"主题匹配: 最佳 {best_topic} ({best_score:.4f})"
+    if passed:
+        result.semantic_reason += f" | 命中 {', '.join(matched_topics)}"
+    else:
+        result.semantic_reason += " | 未命中任何主题"
+    
+    # Shadow/Enforce 模式处理
+    if passed:
+        result.semantic_passed = True
+        result.flags.append(f"embedding_matched:{','.join(matched_topics)}")
+    else:
+        if mode == "enforce":
+            result.semantic_passed = False
+            result.passed = False
+            result.flags.append("embedding_below_all_thresholds")
+        else:
+            # shadow 模式：记录但不淘汰
+            result.semantic_passed = True  # 仍然通过，但标记为 shadow_drop
+            result.flags.append("embedding_shadow_drop")
+            result.semantic_reason += " (shadow)"
+    
+    return result
+
 
 def comment_analysis(article: Dict) -> FilterResult:
     """评论区分析（基于互动指标）"""
@@ -614,14 +815,14 @@ def multi_stage_filter(
     if not rule_result.rule_passed:
         return rule_result
 
-    # 第二层：语义去重
+    # 第二层：兴趣主题匹配
     semantic_result = FilterResult()
-    if enable_semantic and existing_articles:
-        semantic_result = semantic_filter(article, existing_articles)
+    if enable_semantic:
+        semantic_result = topic_embedding_filter(article)
         if not semantic_result.semantic_passed:
             return semantic_result
     else:
-        semantic_result.semantic_reason = "语义去重已跳过或未启用"
+        semantic_result.semantic_reason = "Embedding 主题匹配已跳过"
 
     # 第三层：评论区分析
     comment_result = FilterResult()

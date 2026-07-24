@@ -355,3 +355,29 @@ def init_directories():
         os.makedirs(d, exist_ok=True)
 
 init_directories()
+
+# ============================================================
+# 10. Embedding 主题匹配配置
+# ============================================================
+EMBEDDING_MODEL = "your-embedding-model"          # 如 "text-embedding-3-small"
+EMBEDDING_BATCH_SIZE = 50
+EMBEDDING_MAX_CHARS = 6000
+EMBEDDING_FILTER_MODE = "shadow"                  # shadow | enforce
+
+INTEREST_TOPICS = [
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "description": "AI Agent、智能体框架、工具调用、任务规划、多智能体协作",
+        "threshold": 0.35,
+        "tag_id": "ai-agent",
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "description": "大语言模型的复杂推理、思维链、数学推理、代码推理",
+        "threshold": 0.35,
+        "tag_id": "reasoning-model",
+    },
+    # 根据小红书/知乎的内容特点补充...
+]
