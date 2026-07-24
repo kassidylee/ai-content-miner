@@ -139,10 +139,11 @@ def _normalize_referenced_urls(raw_urls: object) -> List[Dict[str, str]]:
 
 def normalize_article(raw: Dict, platform: str = "") -> Dict:
     """将各平台采集记录转换为下游统一格式。"""
-    title = (
+    raw_title = (
         raw.get("title") or raw.get("标题") or raw.get("note_title") or
-        raw.get("name") or raw.get("nickname") or raw.get("display_name") or "无标题"
+        raw.get("name") or raw.get("nickname") or raw.get("display_name")
     )
+    title = raw_title or "无标题"
 
     content = (
         raw.get("content") or raw.get("正文") or raw.get("description") or
@@ -250,6 +251,10 @@ def normalize_article(raw: Dict, platform: str = "") -> Dict:
         list(raw.get("matched_keywords", []))
         if isinstance(raw.get("matched_keywords"), list)
         else ([raw["search_keyword"]] if raw.get("search_keyword") else []),
+    )
+    platform_metadata.setdefault(
+        "has_native_title",
+        bool(raw_title) and platform_key != "x",
     )
 
     metrics = {

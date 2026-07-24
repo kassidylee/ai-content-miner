@@ -232,6 +232,82 @@ COMMENT_FILTERS = {
 }
 
 # ============================================================
+# 4.6 极简摘要与分层标签
+# ============================================================
+
+ENRICHER_TITLE_MAX_CHARS = 48
+ENRICHER_ABSTRACT_MAX_CHARS = 180
+ENRICHER_INPUT_MAX_CHARS = 6000
+ENRICHER_LONG_MESSAGE_CHARS = 500
+ENRICHER_ENTITY_LIMIT = 5
+ENRICHER_TEMPERATURE = 0.1
+ENRICHER_MAX_TOKENS = 600
+
+# 一级和二级标签只能从这里选择；三级实体需能在原文或链接中找到。
+TAG_TAXONOMY = [
+    {
+        "id": "ai",
+        "label": "AI",
+        "level": 1,
+        "parent_id": None,
+    },
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "multimodal",
+        "label": "多模态",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "ai-infra",
+        "label": "AI Infra",
+        "level": 2,
+        "parent_id": "ai",
+    },
+    {
+        "id": "content-form",
+        "label": "内容形式",
+        "level": 1,
+        "parent_id": None,
+    },
+    {
+        "id": "short-message",
+        "label": "短消息",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "long-message",
+        "label": "长消息",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "paper",
+        "label": "论文",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+    {
+        "id": "project-release",
+        "label": "项目发布",
+        "level": 2,
+        "parent_id": "content-form",
+    },
+]
+
+# ============================================================
 # 5. 企业微信推送配置
 # ============================================================
 

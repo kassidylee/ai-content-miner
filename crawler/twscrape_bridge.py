@@ -512,6 +512,7 @@ class TwscrapeBridge:
             "search_keyword": keyword,
             "matched_keywords": [keyword],
             "platform_metadata": {
+                "has_native_title": False,
                 "lang": str(_safe_attr(tweet, "lang", "") or ""),
                 "hashtags": hashtags,
                 "is_reply": bool(in_reply_to),
