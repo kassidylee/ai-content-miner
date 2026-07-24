@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .local/
-MediaCrawler/
 articles/
 data/
 reports/
