@@ -1,7 +1,7 @@
 """AI Content Miner 工作流主入口。
 
-职责仅限程序编排：配置检查 → 本次爬取 → 本次数据加载 → 分析/过滤/评分
-→ 可选溯源 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
+职责仅限程序编排：配置检查 → 按平台路由 → 本次爬取 → 数据加载
+→ 四层筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import config
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
 from utils.parser import load_articles
-from analyzer.filter import multi_stage_filter, FilterResult  # pyright: ignore[reportUnusedImport]
+from analyzer.filter import multi_stage_filter
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
@@ -72,42 +72,47 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     if not _is_http_url(report_base_url):
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
 
+    score_threshold = getattr(config, "SCORE_THRESHOLD", None)
+    if (
+        not isinstance(score_threshold, (int, float))
+        or isinstance(score_threshold, bool)
+        or not 0 <= score_threshold <= 10
+    ):
+        errors.append("SCORE_THRESHOLD 必须是 0 到 10 之间的数字")
+
     errors.extend(bridge.validate())
     return errors
 
+
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
-    """
-    仅对通过四层筛选且得分达标的文章生成输出。
-    """
+    """仅对通过四层筛选且 0–10 综合分达标的文章生成输出。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
     print("\n📝 [5/6] 生成报告...")
-    
+
     final_items: List[Dict] = []
     generated_count = 0
+    score_threshold = float(getattr(config, "SCORE_THRESHOLD", 6.0))
 
     for index, item in enumerate(scored_items, start=1):
         article = item.get("article", {})
         title = article.get("title", "无标题")[:25]
         total_score = item.get("total_score", 0)
-        
-        # 得分阈值检查（config.SCORE_THRESHOLD 来自旧配置，可根据需要保留或移除）
-        if total_score < getattr(config, "SCORE_THRESHOLD", 0):
+
+        if total_score < score_threshold:
             print(
                 f"   ⏭️ 分数不足 [{index}/{len(scored_items)}] {title} "
-                f"→ {total_score:.1f} < {config.SCORE_THRESHOLD}"
+                f"→ {total_score:.2f} < {score_threshold:.2f}"
             )
             continue
 
         try:
-            # 直接生成输出（不再经过 RAL）
             output_path = generate_output(item)
             if not output_path:
                 print(f"   ❌ 未生成输出: {title}")
                 continue
-            
-            # 记录决策（方便审计）
+
             log_decision(item, output_path)
             final_items.append(item)
             generated_count += 1
@@ -122,8 +127,14 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
     print(f"   ✅ 生成完成，共 {generated_count} 篇报告")
     return final_items, generated_count
 
+
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
+    if getattr(bridge, "platform", "") == "x":
+        from workflows.twitter import run_twitter_workflow
+
+        return run_twitter_workflow(bridge)
+
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
     if not crawl_result.success:
@@ -143,14 +154,13 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print(f"   ✅ 加载 {len(articles)} 篇文章")
 
     print("\n🧠 [3/6] 执行四层筛选（规则 → 语义去重 → 评论区 → 博主画像）...")
-    passed_items: List[Dict] = []   # 存储通过筛选的文章及结果
+    passed_items: List[Dict] = []
     filtered_count = 0
 
     for idx, article in enumerate(articles, start=1):
-        # 调用多阶段筛选（可根据平台开关某些层）
         result = multi_stage_filter(
             article,
-            existing_articles=None,   # 语义去重暂不启用历史对比（可后续优化）
+            existing_articles=None,
             enable_semantic=True,
             enable_comment=True,
             enable_author_profile=True,
@@ -159,34 +169,36 @@ def run_workflow(bridge: CollectorBridge) -> int:
         title = article.get("title", "无标题")[:25]
         if not result.passed:
             filtered_count += 1
-            # 记录淘汰原因（便于调试）
-            print(f"   ⏭️ 淘汰 [{idx}/{len(articles)}] {title} → {result.rule_reason or result.semantic_reason or result.comment_reason or result.author_reason}")
+            reason = (
+                result.rule_reason
+                or result.semantic_reason
+                or result.comment_reason
+                or result.author_reason
+            )
+            print(
+                f"   ⏭️ 淘汰 [{idx}/{len(articles)}] {title} → {reason}"
+            )
             continue
 
-        # 通过筛选：构造 scorer 兼容的数据结构（供后续生成报告）
+        total_score = result.total_score()
         scored_item = {
             "article": article,
-            "total_score": result.total_score(),   # 综合得分
-            "filter_result": result.to_dict(),     # 保留详细筛选信息
-            "blogger_weight": 1.0,                 
+            "total_score": total_score,
+            "filter_result": result.to_dict(),
+            "blogger_weight": 1.0,
         }
         passed_items.append(scored_item)
-        print(f"   ✅ 通过 [{idx}/{len(articles)}] {title} → 综合得分 {result.total_score():.2f}")
+        print(
+            f"   ✅ 通过 [{idx}/{len(articles)}] {title} "
+            f"→ 综合得分 {total_score:.2f}/10"
+        )
 
-    print(f"   ✅ 筛选完成：通过 {len(passed_items)} 篇，淘汰 {filtered_count} 篇")
-
-    # ----- 后续：RAL（禁用） + 生成报告 + 推送 -----
-    if hasattr(config, "ENABLE_RETRIEVAL"):
-        original_retrieval = config.ENABLE_RETRIEVAL
-        config.ENABLE_RETRIEVAL = False   # 临时禁用
-    else:
-        original_retrieval = False
+    print(
+        f"   ✅ 筛选完成：通过 {len(passed_items)} 篇，"
+        f"淘汰 {filtered_count} 篇"
+    )
 
     final_items, generated_count = generate_reports(passed_items)
-
-    # 恢复原配置（若需要）
-    if hasattr(config, "ENABLE_RETRIEVAL"):
-        config.ENABLE_RETRIEVAL = original_retrieval
 
     print("\n📤 [6/6] 推送企业微信...")
     if final_items:
@@ -207,7 +219,7 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print("📊 统计：")
     print(f"   - 读取文章: {len(articles)} 篇")
     print(f"   - 通过筛选: {len(passed_items)} 篇")
-    print(f"   - 规则淘汰: {filtered_count} 篇")   # 注意：这里只是粗略统计，实际淘汰可能包含后续层
+    print(f"   - 四层筛选淘汰: {filtered_count} 篇")
     print(f"   - 生成报告: {generated_count} 篇")
     print(f"   - 推送报告: {len(final_items)} 篇")
     print("=" * 70)

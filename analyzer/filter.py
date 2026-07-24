@@ -1,11 +1,11 @@
 # analyzer/filter.py
 """
-规则过滤模块（小红书和知乎专用）
+非 Twitter 四层筛选模块。
  
 包含：
   1. 旧版 rule_filter（兼容保留，供其他模块调用）
   2. 旧版 get_blogger_weight（已移除 lingzao 依赖，小红书/知乎不使用白名单）
-  3. 新版四层筛选（multi_stage_filter、rule_filter_enhanced、comment_analysis、author_profile_analysis）
+  3. 四层筛选（multi_stage_filter、rule_filter_enhanced、comment_analysis、author_profile_analysis）
 """
 import re
 from typing import Dict, List, Tuple, Optional, Any
@@ -29,6 +29,16 @@ COMMENT_SCORE_MIN = 0.5
 COMMENT_SCORE_MAX = 1.3
 AUTHOR_SCORE_MIN = 0.7
 AUTHOR_SCORE_MAX = 1.4
+
+RAW_SCORE_NEUTRAL = 1.0
+RAW_SCORE_MAX = (
+    RULE_SCORE_MAX
+    * 1.0  # 语义层最高分
+    * COMMENT_SCORE_MAX
+    * AUTHOR_SCORE_MAX
+)
+DISPLAY_SCORE_NEUTRAL = 6.0
+DISPLAY_SCORE_MAX = 10.0
 
 
 # ============================================================
@@ -66,7 +76,7 @@ def get_blogger_weight(article: Dict) -> float:
 
 
 # ============================================================
-# 新版四层筛选（供小红书和知乎使用）
+# 四层筛选（供非 Twitter 流程使用）
 # ============================================================
 
 class FilterLevel(Enum):
@@ -97,9 +107,33 @@ class FilterResult:
     flags: List[str] = field(default_factory=list)
     _low_credibility: bool = False
 
+    def raw_score(self) -> float:
+        """返回四层分数的原始乘积，供审计和阈值校准。"""
+        return (
+            self.rule_score
+            * self.semantic_score
+            * self.comment_score
+            * self.author_score
+        )
+
     def total_score(self) -> float:
-        return (self.rule_score * self.semantic_score *
-                self.comment_score * self.author_score)
+        """将四层乘积分数映射到报告使用的 0–10 分制。
+
+        原始乘积 1.0 表示各层均为中性评价，对应现有的 6 分报告阈值；
+        高于中性的部分线性映射到 10 分，避免旧 0–10 阈值与 0–2.366
+        的原始乘积直接比较。
+        """
+        raw_score = max(0.0, min(RAW_SCORE_MAX, self.raw_score()))
+        if raw_score <= RAW_SCORE_NEUTRAL:
+            display_score = raw_score * DISPLAY_SCORE_NEUTRAL
+        else:
+            positive_range = RAW_SCORE_MAX - RAW_SCORE_NEUTRAL
+            display_score = DISPLAY_SCORE_NEUTRAL + (
+                (raw_score - RAW_SCORE_NEUTRAL)
+                / positive_range
+                * (DISPLAY_SCORE_MAX - DISPLAY_SCORE_NEUTRAL)
+            )
+        return round(min(DISPLAY_SCORE_MAX, display_score), 2)
 
     def to_dict(self) -> Dict:
         return {
@@ -116,6 +150,7 @@ class FilterResult:
             "semantic_score": self.semantic_score,
             "comment_score": self.comment_score,
             "author_score": self.author_score,
+            "raw_score": self.raw_score(),
             "total_score": self.total_score(),
             "flags": self.flags,
             "low_credibility": self._low_credibility
@@ -573,7 +608,7 @@ def multi_stage_filter(
     enable_comment: bool = True,
     enable_author_profile: bool = True
 ) -> FilterResult:
-    """四步综合筛选入口（小红书和知乎专用）"""
+    """非 Twitter 内容的四步综合筛选入口。"""
     # 第一层：规则过滤
     rule_result = rule_filter_enhanced(article)
     if not rule_result.rule_passed:
