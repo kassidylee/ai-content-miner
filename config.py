@@ -42,8 +42,8 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
-# xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ reddit
+# xhs、zhihu 使用 MediaCrawler；x、reddit 使用各自的独立采集器。
 CRAWL_PLATFORM = "xhs"
 
 # 搜索关键词列表
@@ -99,7 +99,35 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
-# 4.3 Twitter 专用结构化处理
+# 4.3 Reddit RSS（本地低频采集）
+# ============================================================
+
+# RSS 不提供帖子分数、点赞比例、评论数或 flair。采集器读取明确社区的
+# new/.rss，再在本地按 SEARCH_KEYWORDS、时间窗口和帖子 ID 过滤。
+REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 10
+REDDIT_RSS_LOOKBACK_HOURS = 168
+REDDIT_RSS_REQUEST_TIMEOUT_SECONDS = 30
+
+# 2026-07-24 的真实响应显示当前出口约 30 秒恢复一次 RSS 请求额度。
+# 多社区之间默认等待 31 秒；建议先只配置一个社区。
+REDDIT_RSS_REQUEST_INTERVAL_SECONDS = 31
+REDDIT_RSS_MAX_RESPONSE_BYTES = 2_000_000
+REDDIT_RSS_BASE_URL = "https://www.reddit.com"
+REDDIT_RSS_USER_AGENT = os.environ.get(
+    "REDDIT_RSS_USER_AGENT",
+    (
+        "python:ai-content-miner:v0.1 "
+        "(contact: https://github.com/kassidylee/ai-content-miner)"
+    ),
+)
+REDDIT_RSS_STATE_FILE = os.path.join(
+    DATA_DIR, "state", "reddit_rss_seen_ids.json"
+)
+REDDIT_RSS_SEEN_ID_LIMIT = 5000
+
+# ============================================================
+# 4.4 Twitter 专用结构化处理
 # ============================================================
 
 # 这些配置只由 Twitter 新流程读取，不影响小红书和知乎的旧筛选链路。
