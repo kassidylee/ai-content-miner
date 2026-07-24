@@ -101,8 +101,14 @@ TWITTER_ENABLE_WECOM = False
 `c9a111be73586bdf6fc44536f088e4db6ed86d64`。在项目根目录克隆并安装：
 
 ```bash
-git clone https://github.com/NanmiCoder/MediaCrawler.git
+git clone --recurse-submodules https://github.com/kassidylee/ai-content-miner.git
+cd ai-content-miner
+
+git submodule update --init --recursive
 cd MediaCrawler
+uv sync
+cd ..
+
 git checkout c9a111be73586bdf6fc44536f088e4db6ed86d64
 uv sync
 cd ..
@@ -433,6 +439,15 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。
+
+本项目通过 Git 子模块依赖
+[MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)。
+MediaCrawler 使用独立的
+[Non-Commercial Learning License 1.1](https://github.com/NanmiCoder/MediaCrawler/blob/main/LICENSE)，
+仅限非商业学习和研究用途，不受本项目 MIT License 覆盖。
+
+使用者必须同时遵守 MediaCrawler 的许可证、免责声明、目标平台服务条款以及适用的法律法规。
+```
 
 ## 致谢
 
