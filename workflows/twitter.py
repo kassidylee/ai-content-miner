@@ -86,10 +86,12 @@ def validate_twitter_runtime_config(
         validate_twitter_rule_config()
     except ValueError as exc:
         errors.append(str(exc))
-    try:
-        validate_twitter_embedding_config()
-    except TwitterEmbeddingError as exc:
-        errors.append(str(exc))
+    # Embedding 关闭时不要求模型和批次配置可用，避免可选能力阻塞主流程。
+    if getattr(config, "TWITTER_EMBEDDING_ENABLED", True):
+        try:
+            validate_twitter_embedding_config()
+        except TwitterEmbeddingError as exc:
+            errors.append(str(exc))
     try:
         twitter_comment_settings()
     except TwitterCommentConfigError as exc:

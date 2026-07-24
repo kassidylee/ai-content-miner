@@ -38,6 +38,20 @@ def make_bridge(acknowledge=None):
 
 
 class TwitterWorkflowTest(unittest.TestCase):
+    def test_disabled_embedding_skips_embedding_config_validation(self):
+        bridge = make_bridge()
+        with patch.object(
+            twitter.config,
+            "TWITTER_EMBEDDING_ENABLED",
+            False,
+        ), patch(
+            "workflows.twitter.validate_twitter_embedding_config",
+            side_effect=TwitterEmbeddingError("must not be called"),
+        ) as validate_embedding:
+            twitter.validate_twitter_runtime_config(bridge)
+
+        validate_embedding.assert_not_called()
+
     def test_twitter_wecom_is_optional_even_if_legacy_webhook_is_placeholder(self):
         bridge = make_bridge()
         with patch.object(twitter.config, "API_KEY", "real-key"), patch.object(
