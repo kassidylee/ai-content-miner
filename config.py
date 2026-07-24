@@ -42,8 +42,8 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X，通过 twscrape）
-# xhs、zhihu 使用 MediaCrawler；x 使用独立的 twscrape 采集器。
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ reddit
+# xhs、zhihu 使用 MediaCrawler；x、reddit 使用各自的独立采集器。
 CRAWL_PLATFORM = "xhs"
 
 # 搜索关键词列表
@@ -99,7 +99,25 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
-# 4.3 Twitter 专用结构化处理
+# 4.3 Reddit 公开 JSON（本地低频采集）
+# ============================================================
+
+# 不使用 OAuth、PRAW、RSS、登录 Cookie 或代理轮换。采集器读取每个社区的
+# new.json，再在本地按 SEARCH_KEYWORDS 和时间窗口过滤。
+REDDIT_SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial"]
+REDDIT_RESULTS_PER_SUBREDDIT = 50
+REDDIT_LOOKBACK_HOURS = 168
+REDDIT_REQUEST_TIMEOUT_SECONDS = 30
+REDDIT_BASE_URL = "https://www.reddit.com"
+REDDIT_USER_AGENT = os.environ.get(
+    "REDDIT_USER_AGENT",
+    "ai-content-miner/0.1 (local Reddit JSON reader)",
+)
+REDDIT_STATE_FILE = os.path.join(DATA_DIR, "state", "reddit_seen_ids.json")
+REDDIT_SEEN_ID_LIMIT = 5000
+
+# ============================================================
+# 4.4 Twitter 专用结构化处理
 # ============================================================
 
 # 这些配置只由 Twitter 新流程读取，不影响小红书和知乎的旧筛选链路。
