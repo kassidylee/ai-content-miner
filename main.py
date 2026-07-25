@@ -1,7 +1,7 @@
 """AI Content Miner 工作流主入口。
 
-职责仅限程序编排：配置检查 → 本次爬取 → 本次数据加载 → 分析/过滤/评分
-→ 可选溯源 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
+职责仅限程序编排：配置检查 → 按平台路由 → 本次爬取 → 数据加载
+→ 四层筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import config
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
 from utils.parser import load_articles
-from analyzer.filter import multi_stage_filter, FilterResult  # pyright: ignore[reportUnusedImport]
+from analyzer.filter import multi_stage_filter
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
@@ -94,43 +94,48 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             validate_github_quality_config()
         except (GithubEmbeddingError, ValueError) as exc:
             errors.append(str(exc))
+            
+    score_threshold = getattr(config, "SCORE_THRESHOLD", None)
+    if (
+        not isinstance(score_threshold, (int, float))
+        or isinstance(score_threshold, bool)
+        or not 0 <= score_threshold <= 10
+    ):
+        errors.append("SCORE_THRESHOLD 必须是 0 到 10 之间的数字")
 
     errors.extend(bridge.validate())
     return errors
 
+
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
-    """
-    仅对通过四层筛选且得分达标的文章生成输出。
-    """
+    """仅对通过四层筛选且 0–10 综合分达标的文章生成输出。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
     print("\n📝 [5/6] 生成报告...")
-    
+
     final_items: List[Dict] = []
     generated_count = 0
+    score_threshold = float(getattr(config, "SCORE_THRESHOLD", 6.0))
 
     for index, item in enumerate(scored_items, start=1):
         article = item.get("article", {})
         title = article.get("title", "无标题")[:25]
         total_score = item.get("total_score", 0)
-        
-        # 得分阈值检查（config.SCORE_THRESHOLD 来自旧配置，可根据需要保留或移除）
-        if total_score < getattr(config, "SCORE_THRESHOLD", 0):
+
+        if total_score < score_threshold:
             print(
                 f"   ⏭️ 分数不足 [{index}/{len(scored_items)}] {title} "
-                f"→ {total_score:.1f} < {config.SCORE_THRESHOLD}"
+                f"→ {total_score:.2f} < {score_threshold:.2f}"
             )
             continue
 
         try:
-            # 直接生成输出（不再经过 RAL）
             output_path = generate_output(item)
             if not output_path:
                 print(f"   ❌ 未生成输出: {title}")
                 continue
-            
-            # 记录决策（方便审计）
+
             log_decision(item, output_path)
             final_items.append(item)
             generated_count += 1
@@ -204,6 +209,11 @@ def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
 
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
+    if getattr(bridge, "platform", "") == "x":
+        from workflows.twitter import run_twitter_workflow
+
+        return run_twitter_workflow(bridge)
+
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
     if not crawl_result.success:
@@ -277,10 +287,6 @@ def run_workflow(bridge: CollectorBridge) -> int:
 
     final_items, generated_count = generate_reports(passed_items)
 
-    # 恢复原配置（若需要）
-    if hasattr(config, "ENABLE_RETRIEVAL"):
-        config.ENABLE_RETRIEVAL = original_retrieval
-
     print("\n📤 [6/6] 推送企业微信...")
     if final_items:
         from notifier.wecom import send_to_wecom
@@ -300,7 +306,7 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print("📊 统计：")
     print(f"   - 读取文章: {len(articles)} 篇")
     print(f"   - 通过筛选: {len(passed_items)} 篇")
-    print(f"   - 规则淘汰: {filtered_count} 篇")   # 注意：这里只是粗略统计，实际淘汰可能包含后续层
+    print(f"   - 四层筛选淘汰: {filtered_count} 篇")
     print(f"   - 生成报告: {generated_count} 篇")
     print(f"   - 推送报告: {len(final_items)} 篇")
     print("=" * 70)

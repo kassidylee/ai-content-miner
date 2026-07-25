@@ -6,6 +6,7 @@ import config
 from crawler.base import CollectorBridge
 from crawler.github_bridge import GithubBridge
 from crawler.mediacrawler_bridge import MediaCrawlerBridge
+from crawler.reddit_rss_bridge import RedditRssBridge
 from crawler.twscrape_bridge import TwscrapeBridge
 
 
@@ -16,4 +17,6 @@ def build_collector() -> CollectorBridge:
         return TwscrapeBridge()
     if platform in {"github", "gh"}:
         return GithubBridge()
+    if platform == "reddit":
+        return RedditRssBridge()
     return MediaCrawlerBridge()

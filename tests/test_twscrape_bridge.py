@@ -181,8 +181,8 @@ class TwscrapeBridgeTest(unittest.TestCase):
             self.assertEqual(
                 api.calls,
                 [
-                    ("AI", 3, {"product": "Latest"}),
-                    ("LLM", 3, {"product": "Latest"}),
+                    ("AI", 3, {"product": "Top"}),
+                    ("LLM", 3, {"product": "Top"}),
                 ],
             )
             self.assertEqual(api.factory_kwargs["pool"], str(bridge.db_file))

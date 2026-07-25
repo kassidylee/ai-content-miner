@@ -1,24 +1,34 @@
 # config.py
 # AI Content Miner 配置文件
-# 使用前请填写所有必要的 API 密钥和路径
+# 敏感值从项目根目录的 .env 读取；可公开配置继续保留在本文件中。
 
 import os
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# load_dotenv 默认不覆盖调用方已经导出的环境变量，便于部署环境注入配置。
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 # ============================================================
 # 1. LLM API 配置
 # ============================================================
 
-API_KEY = os.environ.get("AI_API_KEY", "")
-BASE_URL = os.environ.get("AI_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("AI_MODEL_NAME", "gpt-4")
+API_KEY = os.environ.get("LLM_API_KEY", "").strip()
+BASE_URL = os.environ.get(
+    "LLM_BASE_URL", "https://api.openai.com/v1"
+).strip()
+MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "").strip()
 
 # ============================================================
 # 2. 评分与过滤阈值
 # ============================================================
 
-SCORE_THRESHOLD = 6
+# 四层筛选的原始乘积分数会映射到 0–10；各层均为中性评价时为 6 分。
+SCORE_THRESHOLD = 6.0
+SEMANTIC_DEDUP_THRESHOLD = 0.85
+COMMENT_PASS_THRESHOLD = 0.5
+AUTHOR_PROFILE_THRESHOLD = 0.9
 SHORT_CONTENT_LIMIT = 500
 MEDIUM_CONTENT_LIMIT = 1500
 MIN_CONTENT_LENGTH = 100
@@ -46,17 +56,17 @@ BLOGGER_WHITELIST = {
 # xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
 CRAWL_PLATFORM = "github"
 
-# 搜索关键词列表
+# Twitter 使用带技术意图的组合查询；其他平台仍会把它们作为普通搜索词。
 SEARCH_KEYWORDS = [
-    "AI Agent",
-    "大模型",
-    "量化投资",
-    "LLM",
-    "强化学习"
+    '"AI Agent" (framework OR benchmark OR "tool calling" OR MCP OR GitHub)',
+    '"LLM" (training OR inference OR benchmark OR architecture OR quantization)',
+    '"reinforcement learning" (paper OR benchmark OR implementation OR code)',
+    '("大模型" OR LLM) (训练 OR 推理 OR 架构 OR 评测 OR 量化 OR 微调 OR 开源)',
+    '("AI Agent" OR 智能体) (框架 OR 工具调用 OR MCP OR 开源 OR 实现)',
 ]
 
 # 本次运行进入下游流程的总数量上限。
-CRAWL_LIMIT = 20
+CRAWL_LIMIT = 100
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
@@ -140,8 +150,8 @@ CRAWL_TYPE = "search"
 
 # 本项目直接对齐 PyPI twscrape 0.19.2 的异步 API。
 TWSCRAPE_EXPECTED_VERSION = "0.19.2"
-TWSCRAPE_SEARCH_PRODUCT = "Latest"
-TWSCRAPE_RESULTS_PER_QUERY = 20
+TWSCRAPE_SEARCH_PRODUCT = "Top"
+TWSCRAPE_RESULTS_PER_QUERY = 50
 TWSCRAPE_TIMEOUT_SECONDS = 120
 TWSCRAPE_ACCOUNT_WAIT_SECONDS = 10
 TWSCRAPE_LOOKBACK_HOURS = 168
@@ -155,6 +165,34 @@ TWSCRAPE_STATE_FILE = os.path.join(DATA_DIR, "state", "twscrape_seen_ids.json")
 TWSCRAPE_SEEN_ID_LIMIT = 5000
 
 # ============================================================
+# 4.3 Reddit RSS（本地低频采集）
+# ============================================================
+
+# RSS 不提供帖子分数、点赞比例、评论数或 flair。采集器读取明确社区的
+# new/.rss，再在本地按 SEARCH_KEYWORDS、时间窗口和帖子 ID 过滤。
+REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 10
+REDDIT_RSS_LOOKBACK_HOURS = 168
+REDDIT_RSS_REQUEST_TIMEOUT_SECONDS = 30
+
+# 2026-07-24 的真实响应显示当前出口约 30 秒恢复一次 RSS 请求额度。
+# 多社区之间默认等待 31 秒；建议先只配置一个社区。
+REDDIT_RSS_REQUEST_INTERVAL_SECONDS = 31
+REDDIT_RSS_MAX_RESPONSE_BYTES = 2_000_000
+REDDIT_RSS_BASE_URL = "https://www.reddit.com"
+REDDIT_RSS_USER_AGENT = os.environ.get(
+    "REDDIT_RSS_USER_AGENT",
+    (
+        "python:ai-content-miner:v0.1 "
+        "(contact: https://github.com/kassidylee/ai-content-miner)"
+    ),
+)
+REDDIT_RSS_STATE_FILE = os.path.join(
+    DATA_DIR, "state", "reddit_rss_seen_ids.json"
+)
+REDDIT_RSS_SEEN_ID_LIMIT = 5000
+
+# ============================================================
 # 4.4 Twitter 专用结构化处理
 # ============================================================
 
@@ -165,20 +203,211 @@ TWITTER_RULE_FILTER = {
     "allow_retweets": False,
     "allow_quotes": True,
     "drop_sensitive": True,
-    "min_meaningful_chars": 20,
+    "min_meaningful_chars": 40,
+    # 浏览量或社交互动满足任一门槛即可通过质量检查。
+    "min_view_count": 50,
+    "min_social_engagement": 2,
+    # 不信任 X 搜索结果的宽松匹配，正文必须再次命中至少一个主题词。
+    "required_topic_keywords": [
+        "AI Agent",
+        "AI Agents",
+        "Agentic AI",
+        "智能体",
+        "LLM",
+        "Large Language Model",
+        "Large Language Models",
+        "大模型",
+        "Reinforcement Learning",
+        "强化学习",
+        "Quantitative Trading",
+        "Quant Trading",
+        "Algorithmic Trading",
+        "量化投资",
+    ],
+    "technical_keywords": [
+        "architecture",
+        "framework",
+        "training",
+        "inference",
+        "fine-tuning",
+        "finetuning",
+        "quantization",
+        "evaluation",
+        "benchmark",
+        "paper",
+        "experiment",
+        "code",
+        "open source",
+        "implementation",
+        "tool calling",
+        "dataset",
+        "distillation",
+        "deployment",
+        "repository",
+        "repo",
+        "GitHub",
+        "arXiv",
+        "HuggingFace",
+        "API",
+        "MCP",
+        "RAG",
+        "架构",
+        "框架",
+        "训练",
+        "推理",
+        "微调",
+        "量化",
+        "评测",
+        "基准",
+        "论文",
+        "实验",
+        "代码",
+        "开源",
+        "实现",
+        "工具调用",
+        "数据集",
+        "蒸馏",
+        "部署",
+    ],
+    "technical_depth_keywords": [
+        "architecture",
+        "framework",
+        "inference",
+        "fine-tuning",
+        "finetuning",
+        "quantization",
+        "evaluation",
+        "benchmark",
+        "paper",
+        "experiment",
+        "code",
+        "implementation",
+        "tool calling",
+        "dataset",
+        "distillation",
+        "deployment",
+        "MCP",
+        "RAG",
+        "架构",
+        "框架",
+        "推理",
+        "微调",
+        "量化",
+        "评测",
+        "基准",
+        "论文",
+        "实验",
+        "代码",
+        "实现",
+        "工具调用",
+        "数据集",
+        "蒸馏",
+        "部署",
+    ],
+    "business_penalty_keywords": [
+        "acquisition",
+        "acquire",
+        "funding",
+        "valuation",
+        "revenue",
+        "stock",
+        "IPO",
+        "commercialization",
+        "market cap",
+        "salary",
+        "hiring",
+        "startup",
+        "industry",
+        "geopolitical",
+        "capital expenditure",
+        "capex",
+        "profit",
+        "personnel",
+        "appointed",
+        "promotion",
+        "收购",
+        "融资",
+        "估值",
+        "财报",
+        "股价",
+        "股票",
+        "上市",
+        "商业化",
+        "营收",
+        "市值",
+        "中美",
+        "争霸",
+        "军备竞赛",
+        "薪资",
+        "初创企业",
+        "产业",
+        "创业",
+        "行业格局",
+        "资本",
+        "二级市场",
+        "资本开支",
+        "盈利",
+        "利润",
+        "升任",
+        "任命",
+        "人事",
+        "部门合并",
+        "内部通知",
+        "掌舵",
+    ],
+    "promotion_penalty_keywords": [
+        "course",
+        "webinar",
+        "conference",
+        "event",
+        "hackathon",
+        "newsletter",
+        "subscribe",
+        "top 10",
+        "list of",
+        "recommended",
+        "follow",
+        "课程",
+        "直播",
+        "论坛",
+        "大会",
+        "峰会",
+        "招聘",
+        "offer",
+        "推荐",
+        "关注",
+        "清单",
+        "合集",
+    ],
+    "evidence_domains": [
+        "github.com",
+        "arxiv.org",
+        "huggingface.co",
+        "paperswithcode.com",
+    ],
+    "min_technical_score": 3,
     "exclude_keywords": [
         "airdrop",
         "giveaway",
         "casino",
         "betting",
+        "sportsbook",
+        "match winner",
+        "handicap",
         "招聘",
         "返利",
         "空投",
         "博彩",
+        "下注",
     ],
 }
 
-TWITTER_EMBEDDING_MODEL = "text-embedding-3-small"
+# Twitter 默认只运行本地筛选；仅在 API 服务商提供 Embedding 模型时再启用。
+TWITTER_EMBEDDING_ENABLED = False
+TWITTER_EMBEDDING_MODEL = os.environ.get(
+    "TWITTER_EMBEDDING_MODEL",
+    "text-embedding-3-small",
+).strip()
 TWITTER_EMBEDDING_BATCH_SIZE = 50
 TWITTER_EMBEDDING_MAX_CHARS = 6000
 
@@ -330,7 +559,7 @@ TWITTER_FEED_RETENTION_DAYS = 30
 TWITTER_FEED_MAX_ITEMS = 200
 TWITTER_FEED_DEBUG_METADATA = False
 
-# Twitter 通知独立开关；旧平台继续使用原企业微信配置和行为。
+# Twitter 通知独立开关；非 Twitter 流程继续使用下方企业微信配置。
 TWITTER_ENABLE_WECOM = False
 
 # ============================================================
@@ -381,12 +610,19 @@ def init_directories():
 init_directories()
 
 # ============================================================
-# 10. Embedding 主题匹配配置
+# 10. 非 Twitter 路线的 Embedding 主题匹配配置
 # ============================================================
-'# 兼容旧配置名；通用 Embedding 配置在第 4.0 节定义。'
+
+# 该模型只供小红书、知乎等旧四层筛选使用，Twitter 使用上方独立开关和模型。
+# 如果 API 服务商不支持默认模型，请在 .env 中填写其实际 Embedding 模型 ID。
+EMBEDDING_MODEL = os.environ.get(
+    "EMBEDDING_MODEL",
+    "text-embedding-3-small",
+).strip()
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_MAX_CHARS = 6000
-EMBEDDING_FILTER_MODE = "shadow"                  # shadow | enforce
+# shadow 只记录低相似度结果；enforce 会直接淘汰低于阈值的内容。
+EMBEDDING_FILTER_MODE = "shadow"
 
 INTEREST_TOPICS = [
     {

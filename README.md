@@ -8,13 +8,15 @@
 
 ### 平台处理边界
 
-- 小红书和知乎继续使用现有 MediaCrawler、规则过滤、博主权重、AI 评分、
-  RAL、逐条报告和企业微信流程。
-- Twitter/X 使用独立的新流程：规则筛选、Embedding 多主题筛选、回复区筛选、
+- 小红书和知乎使用 MediaCrawler，并进入规则、语义去重、互动质量和博主画像四层
+  筛选。四层原始分数会正规化为 0–10 综合分，再生成逐条报告并推送企业微信。
+- Twitter/X 使用独立流程：规则筛选、Embedding 多主题筛选、回复区筛选、
   极简摘要、分层标签、`data/processed/x.jsonl` 和 `reports/x.html`。
 - GitHub 使用官方 REST API 搜索最近活跃的公开仓库，仅对最终候选读取 README，
   并通过稳定仓库 ID 去重。首版不采集 Issues、Releases 或 Discussions。
-- Twitter 新流程不会被小红书、知乎或 GitHub 调用；平台能力需要单独显式启用。
+- Reddit 通过指定社区的 `new/.rss` 获取最新帖子，在本地执行关键词、时间窗口和
+  帖子 ID 过滤，随后进入非 Twitter 的四层筛选与输出流程。
+- 主入口对 Twitter 做显式路由；Twitter 流程不会误入小红书、知乎或 Reddit 流程。
 
 ### 适用场景
 
@@ -26,14 +28,11 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 数据爬取 | 小红书、知乎使用 MediaCrawler；X 使用 twscrape；GitHub 使用官方 REST API 搜索公开仓库。 |
-| 智能分析 | 集成 lingzao-skill 风格的内容诊断，包括账号诊断、爆款内容拆解和对标筛选。 |
-| 规则过滤 | 通过字数、关键词和链接检测，快速过滤低质量内容。 |
-| 博主白名单 | 为优质来源增加权重，优先处理可信账号发布的内容。 |
-| 动态评分 | 根据内容长度自适应选择评分维度：短内容使用四维评分，长内容使用五维评分。 |
-| 来源识别 | 自动识别 arXiv ID、GitHub 仓库和转载声明，并标记疑似二手信息。 |
+| 数据爬取 | 小红书、知乎使用 MediaCrawler；X 使用实验性的 twscrape；Reddit 使用 Atom/RSS。 |
+| 四层筛选 | 非 Twitter 内容依次执行规则、语义去重、互动质量和博主画像筛选。 |
+| 综合评分 | 将四层乘积分数正规化到 0–10；中性组合为 6 分，原始分数保留用于审计。 |
+| Twitter 信息流 | 使用独立三层筛选、极简摘要、结构化 JSONL 和聚合页面。 |
 | 多模式输出 | 短内容生成文本卡片（`.txt`）；中长内容生成完整 HTML 研报（`.html`）。 |
-| 评分卡前置 | 将评分雷达图和评分表固定展示在报告顶部。 |
 | 企业微信推送 | 使用 Markdown V2 格式推送消息，并附带在线阅读链接。 |
 | RadIter 日志 | 记录每次决策过程，为后续持续优化提供依据。 |
 
@@ -71,7 +70,8 @@ uv pip install --python .venv/bin/python -r requirements.txt
 `requirements.txt` 只安装内容处理和推送依赖；MediaCrawler 依赖由其
 `uv.lock` 管理，避免把两个项目的 Playwright、pandas 等版本混装。
 twscrape 属于本项目依赖，当前固定为 `0.19.2`；其会话数据库和浏览器 Cookie 只保存在
-实际运行任务的电脑上。
+实际运行任务的电脑上。Reddit RSS 使用 Python 标准库解析 Atom，并复用已有的
+`requests`，不需要 OAuth、PRAW、登录 Cookie 或额外账号。
 
 ### 3. 配置项目
 
@@ -98,6 +98,34 @@ GitHub Embedding 可以使用另一家实际支持 `/embeddings` 的服务：
 $env:GITHUB_EMBEDDING_API_KEY = "your-embedding-api-key"
 $env:GITHUB_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 $env:GITHUB_EMBEDDING_MODEL = "text-embedding-3-small"
+复制环境变量模板，并在本地 `.env` 中填写敏感配置：
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+LLM_API_KEY=your-api-key-here
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL_NAME=your-model-name
+
+# 非 Twitter 流程必填；Twitter 仅在 TWITTER_ENABLE_WECOM=True 时必填。
+WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxx
+```
+
+`.env` 已被 Git 忽略，不得提交。程序启动时会自动加载它；部署环境也可以直接导出
+同名环境变量，且外部环境变量优先于 `.env`。
+
+非敏感运行配置继续在 `config.py` 中维护：
+
+```python
+# 报告预览地址，必须可被企业员工访问
+# 开发环境：http://127.0.0.1:8000/reports（仅本机可访问）
+# 生产环境：请填写企业内部可访问的实际地址
+REPORT_BASE_URL = "http://127.0.0.1:8000/reports"
+
+# Twitter 通知默认关闭
+TWITTER_ENABLE_WECOM = False
 ```
 
 报告预览地址和非敏感开关继续在 `config.py` 中配置。Twitter 仅在
@@ -111,8 +139,14 @@ $env:GITHUB_EMBEDDING_MODEL = "text-embedding-3-small"
 `c9a111be73586bdf6fc44536f088e4db6ed86d64`。在项目根目录克隆并安装：
 
 ```bash
-git clone https://github.com/NanmiCoder/MediaCrawler.git
+git clone --recurse-submodules https://github.com/kassidylee/ai-content-miner.git
+cd ai-content-miner
+
+git submodule update --init --recursive
 cd MediaCrawler
+uv sync
+cd ..
+
 git checkout c9a111be73586bdf6fc44536f088e4db6ed86d64
 uv sync
 cd ..
@@ -197,6 +231,29 @@ GITHUB_MIN_STARS = 10
 GitHub 仓库搜索按 `pushed_at` 时间窗口查询，跨关键词使用 GitHub repository ID 去重，
 应用 Star 和总量限制后才为最终候选读取 README。完整工作流成功后，仓库 ID 才写入
 `data/state/github_seen_ids.json`。
+### 可选：测试 Reddit RSS 采集
+
+Reddit 不经过 MediaCrawler。当前方案读取配置中明确社区的 `new/.rss`，再在本地按
+关键词和最近 168 小时过滤。RSS 不提供帖子分数、点赞比例、评论数或 flair，程序会将
+这些字段明确标记为不可用，不会编造互动数据。
+
+只测试一个社区的 RSS 请求、Atom 解析和下游加载：
+
+```bash
+.venv/bin/python scripts/smoke_test_reddit_rss.py "model" \
+  --subreddit LocalLLaMA --limit 3
+```
+
+烟雾测试成功后修改：
+
+```python
+CRAWL_PLATFORM = "reddit"
+REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+```
+
+2026-07-24 当前开发机真实测试中，RSS 返回 HTTP 200，但响应额度约 30 秒才恢复一次。
+默认只配置一个社区；多社区运行会根据响应头在请求之间等待，避免连续请求触发 429。
+详见 [`docs/reddit-rss-collection.md`](docs/reddit-rss-collection.md)。
 
 ### 6. 运行完整工作流
 
@@ -206,7 +263,8 @@ python3 main.py
 ```
 
 `--check-config` 只检查必填配置和当前采集器。小红书、知乎会检查 MediaCrawler 路径、
-commit 和运行解释器；X 会检查 twscrape 版本、本地会话数据库和已处理状态，
+commit 和运行解释器；X 会检查 twscrape 版本、本地会话数据库和已处理状态；Reddit
+会检查社区列表、RSS 请求参数、User-Agent 和已处理状态，
 不会启动爬虫、调用模型或发送企业微信消息。配置、爬虫退出码、当次无数据或推送
 失败时，主程序均返回非零退出状态。
 
@@ -223,10 +281,12 @@ ai-content-miner/
 │
 ├── analyzer/                   # 分析模块
 │   ├── __init__.py
-│   ├── filter.py               # 规则过滤与博主白名单
-│   ├── scorer.py               # 动态评分
-│   ├── ral.py                  # 来源识别：arXiv、GitHub、转载检测
-│   └── lingzao_adapter.py      # lingzao-skill 风格分析
+│   ├── filter.py               # 非 Twitter 四层筛选
+│   ├── twitter_rules.py        # Twitter 第一层规则
+│   ├── twitter_embedding.py    # Twitter 多主题语义筛选
+│   ├── twitter_comments.py     # Twitter 回复区筛选
+│   ├── twitter_enricher.py     # Twitter 摘要和标签
+│   └── twitter_pipeline.py     # Twitter 三层筛选编排
 │
 ├── crawler/                    # 爬虫模块
 │   ├── __init__.py
@@ -234,15 +294,21 @@ ai-content-miner/
 │   ├── factory.py              # 按平台选择采集器
 │   ├── github_bridge.py        # GitHub REST 仓库搜索与本地去重
 │   ├── mediacrawler_bridge.py  # MediaCrawler 调度
-│   └── twscrape_bridge.py      # X 关键词搜索与本地去重
+│   ├── twscrape_bridge.py      # X 关键词搜索与本地去重
+│   └── reddit_rss_bridge.py    # Reddit Atom/RSS 采集
 ├── scripts/
 │   ├── setup_twscrape_session.py # 创建本地 Cookie 会话
 │   ├── smoke_test_github.py      # 只读 GitHub 仓库搜索烟雾测试
-│   └── smoke_test_twscrape.py    # 只读 X 搜索烟雾测试
+│   ├── smoke_test_twscrape.py    # 只读 X 搜索烟雾测试
+│   └── smoke_test_reddit_rss.py  # 只读 Reddit RSS 烟雾测试
 │
 ├── output/                     # 输出模块
 │   ├── __init__.py
-│   └── generator.py            # 文本卡片和 HTML 研报生成
+│   ├── generator.py            # 文本卡片和 HTML 研报生成
+│   └── twitter_feed.py         # Twitter 聚合页面
+│
+├── workflows/
+│   └── twitter.py              # Twitter 独立工作流
 │
 ├── notifier/                   # 推送模块
 │   ├── __init__.py
@@ -265,10 +331,11 @@ ai-content-miner/
 小红书、知乎：
 MediaCrawler
   -> 本次运行内容文件加载与标准化
-  -> lingzao 分析
-  -> 规则过滤
-  -> 动态评分
-  -> RAL 溯源
+  -> 规则筛选
+  -> 语义去重（提供对比样本时启用）
+  -> 互动质量筛选
+  -> 博主画像筛选
+  -> 0–10 综合评分
   -> 输出生成
   -> 企业微信推送
 
@@ -291,6 +358,13 @@ twscrape
   -> data/processed/x.jsonl
   -> reports/x.html
   -> 可选企业微信通知
+
+Reddit：
+指定 subreddit 的 new/.rss
+  -> Atom 解析和正文清洗
+  -> 本地关键词、时间窗口和 ID 过滤
+  -> 本次运行 JSONL
+  -> 非 Twitter 四层筛选与输出流程
 ```
 
 每次 MediaCrawler 调用都通过 CLI 传入平台、关键词、数量限制、JSONL 格式和
@@ -304,9 +378,12 @@ twscrape 同样为每次执行建立独立输出目录，只读取该次搜索�
 已处理 ID 仅在完整处理和推送流程成功后写入本地状态；烟雾测试不会确认状态，因此可以
 重复测试同一批帖子。
 
+Reddit RSS 同样只读取本次运行的数据。一个社区暂时失败时会继续其他社区；全部社区
+失败时本次运行返回失败。多社区之间默认至少等待 31 秒，并尊重响应中的限流重置时间。
+
 ## 输出模式
 
-小红书和知乎保持原有按内容字数选择输出格式的行为：
+小红书、知乎和 Reddit 按内容字数选择输出格式：
 
 | 内容字数 | 输出格式 | 说明 |
 | --- | --- | --- |
@@ -345,17 +422,23 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 ## 配置说明
 
-### `config.py` 关键配置项
+### 环境变量与 `config.py` 关键配置项
 
 | 配置项 | 说明 | 示例 |
 | --- | --- | --- |
-| `API_KEY` | LLM API Key | `sk-xxxxx` |
-| `MODEL_NAME` | 模型名称 | `gpt-4`、`deepseek-chat` |
-| `SCORE_THRESHOLD` | 评分阈值，达到该分数的内容才会推送 | `6` |
-| `WECOM_WEBHOOK` | 企业微信 Webhook 地址 | `https://qyapi.weixin.qq.com/...` |
+| `LLM_API_KEY` | `.env` 中的 LLM API Key | `your-api-key-here` |
+| `LLM_BASE_URL` | `.env` 中的 OpenAI 兼容 API 地址 | `https://api.openai.com/v1` |
+| `LLM_MODEL_NAME` | `.env` 中由 API 服务商提供的实际模型 ID | `your-model-name` |
+| `EMBEDDING_MODEL` | 非 Twitter 路线使用的实际 Embedding 模型 ID | `text-embedding-3-small` |
+| `TWITTER_EMBEDDING_MODEL` | 启用 Twitter Embedding 后使用的模型 ID | `text-embedding-3-small` |
+| `WECOM_WEBHOOK` | `.env` 中的企业微信 Webhook | `https://qyapi.weixin.qq.com/...` |
+| `SCORE_THRESHOLD` | 四层正规化综合分阈值，范围 0–10 | `6.0` |
+| `SEMANTIC_DEDUP_THRESHOLD` | 非 Twitter 语义重复判定阈值 | `0.85` |
+| `COMMENT_PASS_THRESHOLD` | 非 Twitter 互动质量最低分 | `0.5` |
+| `AUTHOR_PROFILE_THRESHOLD` | 非 Twitter 博主画像最低分 | `0.9` |
 | `REPORT_BASE_URL` | 报告预览服务地址，必须可被员工访问 | `http://127.0.0.1:8000/reports` |
 | `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu`、`x`、`github` |
-| `SEARCH_KEYWORDS` | 搜索关键词 | `["AI Agent", "大模型"]` |
+| `SEARCH_KEYWORDS` | 搜索关键词； 建议使用带技术意图的组合查询 | `["AI Agent", "大模型"]` |
 | `GITHUB_TOKEN` | GitHub API Token，只从环境变量读取 | `github_pat_...` |
 | `GITHUB_LOOKBACK_DAYS` | 仅保留最近推送过代码的仓库 | `7` |
 | `GITHUB_MIN_STARS` | 仓库最低 Star 数 | `0` |
@@ -374,40 +457,43 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `MEDIACRAWLER_COMMIT` | 已对齐并校验的 commit | `c9a111b...` |
 | `MEDIACRAWLER_PYTHON` | 未使用 uv 时的 Python >=3.11 解释器，可留空 | `/path/to/python` |
 | `TWSCRAPE_DB_FILE` | X 本地会话数据库，不得提交 | `.local/x/twscrape.db` |
-| `TWSCRAPE_RESULTS_PER_QUERY` | 每个 X 关键词最多读取条数 | `20` |
+| `TWSCRAPE_RESULTS_PER_QUERY` | 每个 X 关键词最多读取条数 | `50` |
 | `TWSCRAPE_LOOKBACK_HOURS` | X 帖子的本地时间窗口 | `168` |
+| `REDDIT_RSS_SUBREDDITS` | Reddit 明确社区列表 | `["LocalLLaMA"]` |
+| `REDDIT_RSS_RESULTS_PER_SUBREDDIT` | 每个社区最多读取的 feed 条目 | `10` |
+| `REDDIT_RSS_REQUEST_INTERVAL_SECONDS` | 多社区请求间隔 | `31` |
+| `REDDIT_RSS_LOOKBACK_HOURS` | Reddit 本地时间窗口 | `168` |
 | `TWITTER_RULE_FILTER` | 仅供 Twitter 使用的第一层规则 | 字典 |
+| `TWITTER_EMBEDDING_ENABLED` | 是否启用 Twitter Embedding 第二层筛选 | `False` |
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
 | `TWITTER_EMBEDDING_FILTER_MODE` | Twitter 语义筛选模式 | `shadow`、`enforce` |
 | `TWITTER_COMMENT_FILTER` | Twitter 回复区筛选阈值 | 字典 |
 | `TWITTER_TAG_TAXONOMY` | Twitter 受控分层标签 | 列表 |
 | `TWITTER_ENABLE_WECOM` | 是否发送 Twitter 摘要通知 | `False` |
-| `BLOGGER_WHITELIST` | 博主白名单及权重 | `{"博主A": {"weight": 1.3}}` |
-| `ENABLE_RETRIEVAL` | 是否启用来源识别 | `True`、`False` |
 
 ## 当前接入边界
 
-- 主入口按平台分流。小红书、知乎和 GitHub 继续复用
-  `CollectorBridge -> JSONL -> load_articles` 主链路；只有 X 调用 `workflows/twitter.py`。
-- GitHub 首版只发现公开仓库；Releases 是下一种建议接入的数据类型，Issues 和
+- 主入口按平台分流。只有 X 调用 `workflows/twitter.py`；其他平台不会调用 Twitter
+  专用规则、Embedding、回复区筛选或聚合页面。
+  - GitHub 首版只发现公开仓库；Releases 是下一种建议接入的数据类型，Issues 和
   Discussions 保持独立。
-- `ENABLE_LINGZAO_ANALYSIS=False` 或 `ENABLE_RETRIEVAL=False` 时会明确跳过对应步骤，
-  不做无效果调用。
-- 原有 lingzao 适配器中两个始终返回空对象、且没有调用方的方法已移除。
-- RAL 当前只做已有文本与 URL 的来源识别；原文抓取、缓存和循环重评仍未实现。
-- `find_original_article`、`extract_summary`、`extract_keywords`、`count_words` 和
-  `get_recent_decisions` 是已有且有实际实现的工具 API，但当前主流程没有消费者；
-  本轮没有为了凑流程而调用它们。手动 `articles/` 加载也不会在自动爬取流程中回退触发。
+- 小红书、知乎和 Reddit 使用非 Twitter 四层筛选。当前主入口没有加载历史对比样本，
+  因此语义去重层会明确记录为跳过；规则、互动质量和博主画像层仍正常执行。
+- 四层筛选保留原始乘积分数，并将中性组合映射为 6 分、最高组合映射为 10 分。
+  `SCORE_THRESHOLD` 只与正规化后的 0–10 分比较。
+- Lingzao、RAL 和旧 AI 评分器不再由主流程调用。
+- 手动 `articles/` 加载不会在自动爬取流程中回退触发。
 - MediaCrawler 的 `detail`、`creator` 参数尚未在本项目配置中接入，启动检查会明确
   拒绝这两种模式；当前只支持 `search`。
 - 登录方式当前只接入 `qrcode`、`phone`；为避免凭证出现在命令日志或仓库配置中，
   本轮没有接入 cookie 参数。
 - X 仅接入 twscrape 的只读关键词搜索，不包含发帖、点赞、关注、私信、账号池扩容、
   CAPTCHA 绕过或代理轮换。
+- Reddit 仅低频读取配置社区的 `new/.rss`，不使用 OAuth、PRAW、登录 Cookie、
+  搜索 feed 或代理轮换；RSS 不提供互动指标，访问规则变化或限流会使采集失败。
 - twscrape 使用非公开 X GraphQL 接口，可能因 X 改版、Cookie 失效、限流或账号验证而
   中断；任何失败都会返回非零状态，不会显示为采集成功。
-- X 使用独立三层筛选和结构化聚合页，不调用旧平台的 Lingzao、博主权重、
-  AI 评分、RAL 或逐条报告生成器。
+- X 使用独立三层筛选和结构化聚合页，不调用非 Twitter 四层筛选或逐条报告生成器。
 
 ## 常见问题
 
@@ -427,8 +513,8 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 ### Q3：API 调用成本较高怎么办？
 
 - 使用成本更低的模型，例如 `gpt-3.5-turbo` 或 `deepseek-chat`。
-- 提高过滤阈值，减少进入评分环节的文章数量。
-- 仅为评分不低于 6 分的文章生成完整研报。
+- 提高 `SCORE_THRESHOLD`，减少进入输出环节的非 Twitter 内容。
+- Twitter 可先保持 Embedding `shadow` 模式观察分布，再决定是否切换到 `enforce`。
 
 ### Q4：为什么短内容会生成卡片而不是研报？
 
@@ -437,27 +523,16 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 - 少于 500 字：生成纯文本卡片，不进行深度分析。
 - 不少于 500 字：生成完整 HTML 研报，包括雷达图和深度解析。
 
-### Q5：为什么不同内容的评分维度不同？
+### Q5：四层评分为什么仍使用 0–10？
 
-系统会根据内容类型动态选择评分维度：
+四层内部使用乘积分数，原始范围与报告阈值不一致。系统会保留原始分数用于审计，
+同时将各层均为中性的组合映射为 6 分，将当前理论最高组合映射为 10 分。报告和企业
+微信只使用正规化后的 0–10 综合分。
 
-- 短内容或社交媒体短帖：洞察深度、时效性、启发性、可追溯性。
-- 长内容、技术博客或论文：相关性、创新性、可复现性、声誉、社区热度。
+### Q6：语义去重为什么显示“跳过”？
 
-### Q6：来源识别能做什么，不能做什么？
-
-当前版本支持：
-
-- 识别 arXiv ID，例如 `arxiv.org/abs/2301.12345`。
-- 识别 GitHub 仓库，例如 `github.com/user/repo`。
-- 检测转载声明，例如“转载”“本文来自”等关键词。
-- 标记当前来源平台，例如知乎专栏、微信公众号。
-
-当前版本暂不支持：
-
-- 自动抓取原始页面内容。
-- 缓存管理。
-- 循环重评。
+语义去重需要当前批次或历史文章作为对比样本。当前主入口尚未加载历史样本，因此会
+明确记录为跳过，而不是显示为已经执行。后续接入历史事实源后可启用实际对比。
 
 ### Q7：配置 Webhook 后推送失败怎么办？
 
@@ -478,6 +553,14 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 - 如果出现 X 验证、限流或非公开接口变化，应停止重试并重新评估依赖版本。
 - 不要使用个人主账号进行高频测试。
 
+### Q10：Reddit RSS 采集失败怎么办？
+
+- 先用 `scripts/smoke_test_reddit_rss.py` 测试一个明确社区；
+- 首次测试只配置一个社区，并确认关键词能命中该社区近期帖子；
+- 遇到 429 时停止手动连试，按错误中的建议时间等待；
+- RSS 不包含分数、点赞比例、评论数或 flair，不能通过调整解析器补出这些字段；
+- 不要通过登录 Cookie、代理池或 IP 轮换规避访问限制。
+
 ## 更新日志
 
 ### v1.0.0（2026-07-22）
@@ -496,9 +579,18 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 本项目采用 [MIT License](LICENSE)。
 
+本项目通过 Git 子模块依赖
+[MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)。
+MediaCrawler 使用独立的
+[Non-Commercial Learning License 1.1](https://github.com/NanmiCoder/MediaCrawler/blob/main/LICENSE)，
+仅限非商业学习和研究用途，不受本项目 MIT License 覆盖。
+
+使用者必须同时遵守 MediaCrawler 的许可证、免责声明、目标平台服务条款以及适用的法律法规。
+
 ## 致谢
 
 - [MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)：社交媒体爬虫。
 - [twscrape](https://github.com/vladkens/twscrape)：X 非公开 GraphQL 接口的 Python 封装。
+- [Reddit](https://www.reddit.com/)：Atom/RSS 内容来源。
 - lingzao-skill：灵造分析能力参考。
 - [OpenAI](https://openai.com/)：提供 LLM 能力支持。
