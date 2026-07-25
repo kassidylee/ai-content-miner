@@ -41,8 +41,13 @@ class MediaCrawlerBridge:
         self.base_path = _resolve_project_path(config.MEDIACRAWLER_PATH)
         self.platform = self._platform_mapping(config.CRAWL_PLATFORM)
         self.crawl_type = config.CRAWL_TYPE
-        self.keywords = [str(keyword).strip() for keyword in config.SEARCH_KEYWORDS]
-        self.limit = getattr(config, "CRAWL_LIMIT", 20)
+        configured_keywords = getattr(
+            config, "CONTENT_SEARCH_KEYWORDS", config.SEARCH_KEYWORDS
+        )
+        self.keywords = [str(keyword).strip() for keyword in configured_keywords]
+        self.limit = getattr(
+            config, "MEDIACRAWLER_LIMIT", getattr(config, "CRAWL_LIMIT", 20)
+        )
         self.login_type = getattr(config, "MEDIACRAWLER_LOGIN_TYPE", "qrcode")
         self.expected_commit = getattr(config, "MEDIACRAWLER_COMMIT", "")
         self.timeout = getattr(config, "MEDIACRAWLER_TIMEOUT_SECONDS", 900)
@@ -167,12 +172,20 @@ class MediaCrawlerBridge:
             )
 
         if completed.returncode != 0:
+            diagnostics = self._diagnostics(completed)
+            error = f"MediaCrawler 退出码为 {completed.returncode}"
+            if diagnostics:
+                error += f"；子进程输出：{diagnostics}"
+            error += (
+                "。请检查 MediaCrawler 登录状态、验证码/风控响应、"
+                "当前 IP 网络和请求频率"
+            )
             return CrawlRunResult(
                 success=False,
                 command=tuple(command),
                 output_dir=output_dir,
                 returncode=completed.returncode,
-                error=f"MediaCrawler 退出码为 {completed.returncode}",
+                error=error,
             )
 
         data_files = self._find_content_files(output_dir)
@@ -192,6 +205,15 @@ class MediaCrawlerBridge:
             output_dir=output_dir,
             returncode=completed.returncode,
         )
+
+    @staticmethod
+    def _diagnostics(completed: subprocess.CompletedProcess) -> str:
+        """Return a bounded child-process tail without flooding the workflow log."""
+        parts = []
+        for value in (getattr(completed, "stdout", ""), getattr(completed, "stderr", "")):
+            if value:
+                parts.extend(str(value).splitlines())
+        return " | ".join(line.strip() for line in parts[-12:] if line.strip())[-3000:]
 
     def acknowledge(self) -> str:
         """MediaCrawler 不维护额外的本地已处理状态。"""

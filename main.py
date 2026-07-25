@@ -18,7 +18,10 @@ import config
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
 from utils.parser import load_articles
-from analyzer.filter import multi_stage_filter
+from analyzer.filter import (
+    multi_stage_filter,
+    recent_keyword_filter,
+)
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
@@ -232,6 +235,23 @@ def run_workflow(bridge: CollectorBridge) -> int:
         return EXIT_NO_DATA
     print(f"   ✅ 加载 {len(articles)} 篇文章")
 
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        articles, recent_stats = recent_keyword_filter(articles)
+        print(
+            "   🗓️ 三日关键词筛选："
+            f"保留 {recent_stats['kept']} 篇，"
+            f"时间淘汰 {recent_stats['dropped_old']} 篇，"
+            f"无时间 {recent_stats['dropped_missing_time']} 篇，"
+            f"无关键词 {recent_stats['dropped_unrelated']} 篇"
+        )
+        if recent_stats["truncated"]:
+            print(
+                "   ⚠️ 相关内容超过上限，"
+                f"另截断 {recent_stats['truncated']} 篇"
+            )
+        if not articles:
+            print("   ❌ 最近三天没有命中关键词的内容，流程终止")
+            return EXIT_NO_DATA
     if getattr(bridge, "platform", "") == "github":
         print("\n🧠 [3/6] 执行 GitHub 筛选（仓库规则 → 关键词 Embedding → 质量评分）...")
         try:

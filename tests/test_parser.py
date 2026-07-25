@@ -118,6 +118,23 @@ class ParserTest(unittest.TestCase):
                     "watchers_count": 20,
                     "open_issues_count": 3,
                     "pushed_at": "2026-07-23T08:30:00Z",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file], platform="github", allow_manual_fallback=False
+                )
+
+        article = articles[0]
+        self.assertEqual(article["title"], "example/agent")
+        self.assertEqual(article["source"], "GitHub")
+        self.assertEqual(article["url"], "https://github.com/example/agent")
+        self.assertEqual(article["author"], "example")
+        self.assertEqual(article["likes"], 120)
+        self.assertEqual(article["collects"], 15)
+        self.assertEqual(article["shares"], 20)
+        self.assertEqual(article["comments"], 3)
+
     def test_loads_reddit_rss_fields_without_inventing_metrics(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_file = Path(temp_dir) / "search_contents_2026-07-24.jsonl"
@@ -141,21 +158,7 @@ class ParserTest(unittest.TestCase):
             )
             with patch("utils.parser.config.CRAWL_LIMIT", 20):
                 articles = load_articles(
-                    [data_file], platform="github", allow_manual_fallback=False
-                )
-
-        article = articles[0]
-        self.assertEqual(article["title"], "example/agent")
-        self.assertEqual(article["source"], "GitHub")
-        self.assertEqual(article["url"], "https://github.com/example/agent")
-        self.assertEqual(article["author"], "example")
-        self.assertEqual(article["likes"], 120)
-        self.assertEqual(article["collects"], 15)
-        self.assertEqual(article["shares"], 20)
-        self.assertEqual(article["comments"], 3)
-                    [data_file],
-                    platform="reddit",
-                    allow_manual_fallback=False,
+                    [data_file], platform="reddit", allow_manual_fallback=False
                 )
 
         self.assertEqual(len(articles), 1)
@@ -167,7 +170,6 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["comments"], 0)
         self.assertIsNone(article["raw"]["score"])
         self.assertFalse(article["raw"]["metrics_available"])
-
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -56,7 +56,7 @@ BLOGGER_WHITELIST = {
 # xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
 CRAWL_PLATFORM = "github"
 
-# Twitter 使用带技术意图的组合查询；其他平台仍会把它们作为普通搜索词。
+# Twitter 使用带技术意图的组合查询。
 SEARCH_KEYWORDS = [
     '"AI Agent" (framework OR benchmark OR "tool calling" OR MCP OR GitHub)',
     '"LLM" (training OR inference OR benchmark OR architecture OR quantization)',
@@ -65,8 +65,27 @@ SEARCH_KEYWORDS = [
     '("AI Agent" OR 智能体) (框架 OR 工具调用 OR MCP OR 开源 OR 实现)',
 ]
 
+# 小红书、知乎使用普通主题词进行搜索和正文关键词前置筛选。
+CONTENT_SEARCH_KEYWORDS = [
+    "AI Agent",
+    "智能体",
+    "大模型",
+    "LLM",
+    "强化学习",
+    "量化投资",
+    "推理模型",
+    "多模态",
+    "AI Infra",
+]
+
 # 本次运行进入下游流程的总数量上限。
 CRAWL_LIMIT = 100
+# MediaCrawler 每个关键词最多采集一页，降低平台风控概率。
+MEDIACRAWLER_LIMIT = 20
+# 小红书、知乎进入评分前只保留最近三天且命中关键词的内容。
+CONTENT_LOOKBACK_DAYS = 3
+# 0 表示不限制；默认限制 100 篇，防止一次运行触发过多 Embedding/LLM 请求。
+CONTENT_KEYWORD_MAX_ITEMS = 100
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
@@ -76,12 +95,8 @@ ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
 # Embedding Key/Base URL 可与聊天模型完全分离；只从环境变量读取。
 EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
-EMBEDDING_BASE_URL = os.environ.get(
-    "EMBEDDING_BASE_URL", "https://api.openai.com/v1"
-)
-EMBEDDING_MODEL = os.environ.get(
-    "EMBEDDING_MODEL", "text-embedding-3-small"
-)
+EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_TIMEOUT_SECONDS = 60
 EMBEDDING_MAX_RETRIES = 2
