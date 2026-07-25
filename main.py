@@ -27,6 +27,7 @@ EXIT_CRAWLER = 3
 EXIT_NO_DATA = 4
 EXIT_NOTIFY = 5
 EXIT_STATE = 6
+EXIT_EMBEDDING = 7
 
 
 def _is_http_url(value: str) -> bool:
@@ -72,6 +73,28 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     if not _is_http_url(report_base_url):
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
 
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        if not str(getattr(config, "EMBEDDING_API_KEY", "")).strip():
+            errors.append("EMBEDDING_API_KEY 未配置")
+        if not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
+            errors.append("EMBEDDING_BASE_URL 必须是有效的 http/https URL")
+        if not str(getattr(config, "EMBEDDING_MODEL", "")).strip():
+            errors.append("EMBEDDING_MODEL 不能为空")
+    if getattr(bridge, "platform", "") == "github":
+        from analyzer.github_embedding import (
+            GithubEmbeddingError,
+            validate_github_embedding_config,
+        )
+        from analyzer.github_quality import validate_github_quality_config
+        from analyzer.github_rules import validate_github_rule_config
+
+        try:
+            validate_github_rule_config()
+            validate_github_embedding_config()
+            validate_github_quality_config()
+        except (GithubEmbeddingError, ValueError) as exc:
+            errors.append(str(exc))
+            
     score_threshold = getattr(config, "SCORE_THRESHOLD", None)
     if (
         not isinstance(score_threshold, (int, float))
@@ -127,6 +150,62 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
     print(f"   ✅ 生成完成，共 {generated_count} 篇报告")
     return final_items, generated_count
 
+def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
+    """运行 GitHub 专用筛选，并转换为已有报告生成器输入。"""
+    from analyzer.github_pipeline import run_github_filters
+
+    filtered = run_github_filters(articles)
+    passed_items: List[Dict] = []
+    for index, article in enumerate(filtered["passed"], start=1):
+        metadata = article.get("github_filter_metadata", {})
+        stages = metadata.get("stages", []) if isinstance(metadata, dict) else []
+        quality = next(
+            (
+                stage for stage in reversed(stages)
+                if isinstance(stage, dict) and stage.get("stage") == "quality"
+            ),
+            {},
+        )
+        total_score = float(quality.get("score", 0.0) or 0.0)
+        components = quality.get("components", {})
+        passed_items.append(
+            {
+                "article": article,
+                "total_score": total_score,
+                "filter_result": metadata,
+                "blogger_weight": 1.0,
+                "dimensions": [
+                    "相关度", "文档质量", "社区热度", "活跃度", "项目元数据"
+                ],
+                "scores": [
+                    float(components.get("relevance", 0.0)),
+                    float(components.get("documentation", 0.0)),
+                    float(components.get("community", 0.0)),
+                    float(components.get("activity", 0.0)),
+                    float(components.get("metadata", 0.0)),
+                ],
+                "summary": (
+                    str(article.get("raw", {}).get("description", "") or "")
+                    or "GitHub 开源仓库"
+                )[:180],
+                "category": "GitHub 开源项目",
+            }
+        )
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ✅ 通过 [{index}/{len(filtered['passed'])}] {title} "
+            f"→ GitHub 质量分 {total_score:.2f}"
+        )
+
+    for index, article in enumerate(filtered["dropped"], start=1):
+        metadata = article.get("github_filter_metadata", {})
+        reasons = metadata.get("final_reason_codes", []) if isinstance(metadata, dict) else []
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ⏭️ 淘汰 [{index}/{len(filtered['dropped'])}] {title} "
+            f"→ {', '.join(reasons) or 'GITHUB_FILTER_DROPPED'}"
+        )
+    return passed_items, len(filtered["dropped"])
 
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
@@ -153,50 +232,58 @@ def run_workflow(bridge: CollectorBridge) -> int:
         return EXIT_NO_DATA
     print(f"   ✅ 加载 {len(articles)} 篇文章")
 
-    print("\n🧠 [3/6] 执行四层筛选（规则 → 语义去重 → 评论区 → 博主画像）...")
-    passed_items: List[Dict] = []
-    filtered_count = 0
+    if getattr(bridge, "platform", "") == "github":
+        print("\n🧠 [3/6] 执行 GitHub 筛选（仓库规则 → 关键词 Embedding → 质量评分）...")
+        try:
+            passed_items, filtered_count = _run_github_filters(articles)
+        except Exception as exc:
+            from analyzer.github_embedding import GithubEmbeddingError
 
-    for idx, article in enumerate(articles, start=1):
-        result = multi_stage_filter(
-            article,
-            existing_articles=None,
-            enable_semantic=True,
-            enable_comment=True,
-            enable_author_profile=True,
-        )
-
-        title = article.get("title", "无标题")[:25]
-        if not result.passed:
-            filtered_count += 1
-            reason = (
-                result.rule_reason
-                or result.semantic_reason
-                or result.comment_reason
-                or result.author_reason
+            if isinstance(exc, GithubEmbeddingError):
+                print(f"   ❌ GitHub Embedding 筛选失败: {exc}")
+                return EXIT_EMBEDDING
+            print(f"   ❌ GitHub 筛选失败: {type(exc).__name__}: {exc}")
+            return EXIT_UNEXPECTED
+    else:
+        print("\n🧠 [3/6] 执行四层筛选（规则 → 语义去重 → 评论区 → 博主画像）...")
+        passed_items = []
+        filtered_count = 0
+        for idx, article in enumerate(articles, start=1):
+            result = multi_stage_filter(
+                article,
+                existing_articles=None,
+                enable_semantic=True,
+                enable_comment=True,
+                enable_author_profile=True,
+            )
+            title = article.get("title", "无标题")[:25]
+            if not result.passed:
+                filtered_count += 1
+                print(
+                    f"   ⏭️ 淘汰 [{idx}/{len(articles)}] {title} → "
+                    f"{result.rule_reason or result.semantic_reason or result.comment_reason or result.author_reason}"
+                )
+                continue
+            passed_items.append(
+                {
+                    "article": article,
+                    "total_score": result.total_score(),
+                    "filter_result": result.to_dict(),
+                    "blogger_weight": 1.0,
+                }
             )
             print(
-                f"   ⏭️ 淘汰 [{idx}/{len(articles)}] {title} → {reason}"
+                f"   ✅ 通过 [{idx}/{len(articles)}] {title} "
+                f"→ 综合得分 {result.total_score():.2f}"
             )
-            continue
 
-        total_score = result.total_score()
-        scored_item = {
-            "article": article,
-            "total_score": total_score,
-            "filter_result": result.to_dict(),
-            "blogger_weight": 1.0,
-        }
-        passed_items.append(scored_item)
-        print(
-            f"   ✅ 通过 [{idx}/{len(articles)}] {title} "
-            f"→ 综合得分 {total_score:.2f}/10"
-        )
-
-    print(
-        f"   ✅ 筛选完成：通过 {len(passed_items)} 篇，"
-        f"淘汰 {filtered_count} 篇"
-    )
+    print(f"   ✅ 筛选完成：通过 {len(passed_items)} 篇，淘汰 {filtered_count} 篇")
+    # ----- 后续：RAL（禁用） + 生成报告 + 推送 -----
+    if hasattr(config, "ENABLE_RETRIEVAL"):
+        original_retrieval = config.ENABLE_RETRIEVAL
+        config.ENABLE_RETRIEVAL = False   # 临时禁用
+    else:
+        original_retrieval = False
 
     final_items, generated_count = generate_reports(passed_items)
 

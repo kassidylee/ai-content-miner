@@ -12,6 +12,8 @@
   筛选。四层原始分数会正规化为 0–10 综合分，再生成逐条报告并推送企业微信。
 - Twitter/X 使用独立流程：规则筛选、Embedding 多主题筛选、回复区筛选、
   极简摘要、分层标签、`data/processed/x.jsonl` 和 `reports/x.html`。
+- GitHub 使用官方 REST API 搜索最近活跃的公开仓库，仅对最终候选读取 README，
+  并通过稳定仓库 ID 去重。首版不采集 Issues、Releases 或 Discussions。
 - Reddit 通过指定社区的 `new/.rss` 获取最新帖子，在本地执行关键词、时间窗口和
   帖子 ID 过滤，随后进入非 Twitter 的四层筛选与输出流程。
 - 主入口对 Twitter 做显式路由；Twitter 流程不会误入小红书、知乎或 Reddit 流程。
@@ -41,7 +43,8 @@
 - Python 3.9 或更高版本；使用 X/twscrape 时需要 Python 3.10 或更高版本
 - [uv](https://docs.astral.sh/uv/)（用于安装并运行 MediaCrawler）
 - OpenAI API Key，或兼容接口的 API Key
-- 小红书或知乎流程需要企业微信机器人 Webhook；Twitter 通知默认关闭
+- 小红书、知乎和 GitHub 完整流程需要企业微信机器人 Webhook；Twitter 通知默认关闭
+- GitHub 流程需要从环境变量读取的 `GITHUB_TOKEN`
 
 ### 1. 克隆项目
 
@@ -72,6 +75,29 @@ twscrape 属于本项目依赖，当前固定为 `0.19.2`；其会话数据库�
 
 ### 3. 配置项目
 
+凭证只通过环境变量注入，不要写入 `config.py`。PowerShell 当前会话示例：
+
+```powershell
+$env:AI_API_KEY = "your-chat-api-key"
+$env:AI_BASE_URL = "https://your-chat-provider.example/v1"
+$env:AI_MODEL_NAME = "your-chat-model"
+$env:WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+```
+
+通用 Embedding 配置（小红书、知乎，以及未单独覆盖的 GitHub）使用以下环境变量：
+
+```powershell
+$env:EMBEDDING_API_KEY = "your-embedding-api-key"
+$env:EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+$env:EMBEDDING_MODEL = "text-embedding-3-small"
+```
+
+GitHub Embedding 可以使用另一家实际支持 `/embeddings` 的服务：
+
+```powershell
+$env:GITHUB_EMBEDDING_API_KEY = "your-embedding-api-key"
+$env:GITHUB_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+$env:GITHUB_EMBEDDING_MODEL = "text-embedding-3-small"
 复制环境变量模板，并在本地 `.env` 中填写敏感配置：
 
 ```bash
@@ -101,6 +127,9 @@ REPORT_BASE_URL = "http://127.0.0.1:8000/reports"
 # Twitter 通知默认关闭
 TWITTER_ENABLE_WECOM = False
 ```
+
+报告预览地址和非敏感开关继续在 `config.py` 中配置。Twitter 仅在
+`TWITTER_ENABLE_WECOM=True` 时使用企业微信 Webhook。
 
 其他配置项请参阅 `config.py` 中的注释。
 
@@ -178,6 +207,30 @@ X 不经过 MediaCrawler。本分支使用 `twscrape==0.19.2` 的异步 `API.sea
 CRAWL_PLATFORM = "x"
 ```
 
+### 可选：测试 GitHub 仓库搜索
+
+创建一个只读 GitHub Token，并仅在当前 PowerShell 会话中设置。不要把 Token 写入
+`config.py`、README、日志或提交记录：
+
+```powershell
+$env:GITHUB_TOKEN = "github_pat_your_token"
+python scripts/smoke_test_github.py "AI Agent" "LLM" --limit 3
+python scripts/smoke_test_github_embedding.py
+```
+
+烟雾测试只调用 GitHub REST API 并写入本次运行 JSONL，不调用 LLM、不生成报告、
+不发送企业微信，也不写入已处理状态。成功后在 `config.py` 中设置：
+
+```python
+CRAWL_PLATFORM = "github"
+SEARCH_KEYWORDS = ["AI Agent", "LLM"]
+GITHUB_LOOKBACK_DAYS = 7
+GITHUB_MIN_STARS = 10
+```
+
+GitHub 仓库搜索按 `pushed_at` 时间窗口查询，跨关键词使用 GitHub repository ID 去重，
+应用 Star 和总量限制后才为最终候选读取 README。完整工作流成功后，仓库 ID 才写入
+`data/state/github_seen_ids.json`。
 ### 可选：测试 Reddit RSS 采集
 
 Reddit 不经过 MediaCrawler。当前方案读取配置中明确社区的 `new/.rss`，再在本地按
@@ -239,11 +292,13 @@ ai-content-miner/
 │   ├── __init__.py
 │   ├── base.py                 # 采集器公共结果与接口
 │   ├── factory.py              # 按平台选择采集器
+│   ├── github_bridge.py        # GitHub REST 仓库搜索与本地去重
 │   ├── mediacrawler_bridge.py  # MediaCrawler 调度
 │   ├── twscrape_bridge.py      # X 关键词搜索与本地去重
 │   └── reddit_rss_bridge.py    # Reddit Atom/RSS 采集
 ├── scripts/
 │   ├── setup_twscrape_session.py # 创建本地 Cookie 会话
+│   ├── smoke_test_github.py      # 只读 GitHub 仓库搜索烟雾测试
 │   ├── smoke_test_twscrape.py    # 只读 X 搜索烟雾测试
 │   └── smoke_test_reddit_rss.py  # 只读 Reddit RSS 烟雾测试
 │
@@ -283,6 +338,15 @@ MediaCrawler
   -> 0–10 综合评分
   -> 输出生成
   -> 企业微信推送
+
+GitHub：
+GitHub REST API 仓库搜索
+  -> 最近活跃时间和 Star 过滤
+  -> 跨关键词 repository ID 去重
+  -> 最终候选 README 拉取
+  -> 本次运行 JSONL 与统一标准化
+  -> 现有筛选、报告和通知链路
+  -> 成功后确认已处理状态
 
 Twitter/X：
 twscrape
@@ -373,8 +437,22 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `COMMENT_PASS_THRESHOLD` | 非 Twitter 互动质量最低分 | `0.5` |
 | `AUTHOR_PROFILE_THRESHOLD` | 非 Twitter 博主画像最低分 | `0.9` |
 | `REPORT_BASE_URL` | 报告预览服务地址，必须可被员工访问 | `http://127.0.0.1:8000/reports` |
-| `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu`、`x`、`reddit` |
-| `SEARCH_KEYWORDS` | 搜索关键词；X 建议使用带技术意图的组合查询 | `["\"AI Agent\" (framework OR benchmark)"]` |
+| `CRAWL_PLATFORM` | 爬取平台 | `xhs`、`zhihu`、`x`、`github` |
+| `SEARCH_KEYWORDS` | 搜索关键词； 建议使用带技术意图的组合查询 | `["AI Agent", "大模型"]` |
+| `GITHUB_TOKEN` | GitHub API Token，只从环境变量读取 | `github_pat_...` |
+| `GITHUB_LOOKBACK_DAYS` | 仅保留最近推送过代码的仓库 | `7` |
+| `GITHUB_MIN_STARS` | 仓库最低 Star 数 | `0` |
+| `GITHUB_RESULTS_PER_QUERY` | 每个关键词最多读取的候选数 | `20` |
+| `GITHUB_README_MAX_CHARS` | 最终候选 README 最大字符数 | `6000` |
+| `EMBEDDING_API_KEY` | 通用 Embedding API Key，只从环境变量读取 | - |
+| `EMBEDDING_BASE_URL` | 通用 Embedding API 地址 | `https://api.openai.com/v1` |
+| `EMBEDDING_MODEL` | 通用 Embedding 模型 | `text-embedding-3-small` |
+| `GITHUB_EMBEDDING_API_KEY` | GitHub Embedding 专用 Key，只从环境变量读取 | - |
+| `GITHUB_EMBEDDING_BASE_URL` | 支持 `/embeddings` 的 API 地址 | `https://api.openai.com/v1` |
+| `GITHUB_EMBEDDING_MODEL` | GitHub 关键词相似度模型 | `text-embedding-3-small` |
+| `GITHUB_EMBEDDING_THRESHOLD` | 仓库内容与关键词的最低相似度 | `0.35` |
+| `GITHUB_EMBEDDING_FILTER_MODE` | GitHub 语义筛选模式 | `enforce`、`shadow` |
+| `GITHUB_QUALITY_MIN_SCORE` | GitHub 质量筛选最低分 | `5.0` |
 | `MEDIACRAWLER_PATH` | MediaCrawler 仓库路径 | `./MediaCrawler` |
 | `MEDIACRAWLER_COMMIT` | 已对齐并校验的 commit | `c9a111b...` |
 | `MEDIACRAWLER_PYTHON` | 未使用 uv 时的 Python >=3.11 解释器，可留空 | `/path/to/python` |
@@ -397,6 +475,8 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 - 主入口按平台分流。只有 X 调用 `workflows/twitter.py`；其他平台不会调用 Twitter
   专用规则、Embedding、回复区筛选或聚合页面。
+  - GitHub 首版只发现公开仓库；Releases 是下一种建议接入的数据类型，Issues 和
+  Discussions 保持独立。
 - 小红书、知乎和 Reddit 使用非 Twitter 四层筛选。当前主入口没有加载历史对比样本，
   因此语义去重层会明确记录为跳过；规则、互动质量和博主画像层仍正常执行。
 - 四层筛选保留原始乘积分数，并将中性组合映射为 6 分、最高组合映射为 10 分。
