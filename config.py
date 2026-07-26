@@ -108,6 +108,17 @@ EMBEDDING_MAX_RETRIES = 2
 # 令牌只从环境变量读取，禁止写入仓库配置或提交到 Git。
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_API_BASE_URL = "https://api.github.com"
+# GitHub 使用简单关键词；不要复用 Twitter 的 AND/OR 查询表达式。
+GITHUB_SEARCH_KEYWORDS = [
+    "AI Agent",
+    "智能体",
+    "大模型",
+    "LLM",
+    "强化学习",
+    "推理模型",
+    "多模态",
+    "AI Infra",
+]
 GITHUB_RESULTS_PER_QUERY = 20
 GITHUB_LOOKBACK_DAYS = 7
 GITHUB_MIN_STARS = 0
