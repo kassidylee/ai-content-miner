@@ -153,6 +153,30 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
     print(f"   ✅ 生成完成，共 {generated_count} 篇报告")
     return final_items, generated_count
 
+def _print_retrieval_stats(articles: Sequence[Dict], passed_items: Sequence[Dict], final_items: Sequence[Dict]) -> None:
+    """Print per-query production yield without changing scoring decisions."""
+    passed_ids = {id(item.get("article", {})) for item in passed_items}
+    report_ids = {id(item.get("article", {})) for item in final_items}
+    stats: Dict[str, Dict[str, int]] = {}
+    for article in articles:
+        for match in article.get("_retrieval_matches", []):
+            key = f"{match['intent_group']} / {match['query']}"
+            bucket = stats.setdefault(key, {"collected": 0, "passed": 0, "reports": 0})
+            bucket["collected"] += 1
+            article_id = id(article)
+            if article_id in passed_ids:
+                bucket["passed"] += 1
+            if article_id in report_ids:
+                bucket["reports"] += 1
+    if not stats:
+        return
+    print("   📈 检索产出统计（按意图组 / 查询）：")
+    for key, bucket in sorted(stats.items(), key=lambda item: (-item[1]["reports"], item[0])):
+        print(
+            f"      {key}: 采集 {bucket['collected']}，"
+            f"评分通过 {bucket['passed']}，研报 {bucket['reports']}"
+        )
+
 def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
     """运行 GitHub 专用筛选，并转换为已有报告生成器输入。"""
     from analyzer.github_pipeline import run_github_filters
@@ -306,6 +330,8 @@ def run_workflow(bridge: CollectorBridge) -> int:
         original_retrieval = False
 
     final_items, generated_count = generate_reports(passed_items)
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        _print_retrieval_stats(articles, passed_items, final_items)
 
     print("\n📤 [6/6] 推送企业微信...")
     if final_items:

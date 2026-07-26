@@ -55,6 +55,30 @@ DISPLAY_SCORE_MAX = 10.0
 # ============================================================
 
 
+def _search_specs() -> List[Dict[str, str]]:
+    topics = getattr(config, "CONTENT_SEARCH_KEYWORDS", [])
+    intents = getattr(config, "CONTENT_SEARCH_INTENTS", {})
+    if isinstance(topics, str):
+        topics = [topics]
+    specs: List[Dict[str, str]] = []
+    seen = set()
+    for topic in topics if isinstance(topics, (list, tuple)) else []:
+        base = str(topic or "").strip()
+        for group, values in intents.items() if isinstance(intents, dict) else []:
+            for value in values if isinstance(values, (list, tuple)) else []:
+                intent = str(value or "").strip()
+                query = f"{base} {intent}".strip()
+                if base and intent and query.casefold() not in seen:
+                    seen.add(query.casefold())
+                    specs.append({"base_keyword": base, "intent_group": str(group), "intent_keyword": intent, "query": query})
+    maximum = int(getattr(config, "CONTENT_SEARCH_MAX_QUERIES", 60))
+    return specs[:maximum] if maximum > 0 else specs
+
+
+def _search_matches(searchable: str) -> List[Dict[str, str]]:
+    lowered = searchable.casefold()
+    return [spec for spec in _search_specs() if spec["base_keyword"].casefold() in lowered and spec["intent_keyword"].casefold() in lowered]
+
 def _keyword_terms() -> List[str]:
     configured = getattr(
         config,
@@ -174,6 +198,7 @@ def recent_keyword_filter(
             stats["dropped_unrelated"] += 1
             continue
         article["_recent_keyword_matches"] = matched
+        article["_retrieval_matches"] = _search_matches(searchable)
         candidates.append((published_at, len(matched), article, matched))
 
     # Recent posts first; among equally recent posts, retain those matching

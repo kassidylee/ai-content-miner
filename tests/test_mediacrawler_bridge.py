@@ -22,7 +22,7 @@ class MediaCrawlerBridgeTest(unittest.TestCase):
 
         command = bridge.build_command(Path("/tmp/current-run"))
 
-        self.assertEqual(Path(command[0]).name, "uv")
+        self.assertEqual(Path(command[0]).stem.lower(), "uv")
         self.assertEqual(command[1:3], ["run", "main.py"])
         self.assertEqual(command[command.index("--keywords") + 1], "AI Agent,大模型")
         self.assertEqual(
@@ -33,6 +33,14 @@ class MediaCrawlerBridgeTest(unittest.TestCase):
         self.assertNotIn("--keyword", command)
         self.assertNotIn("--limit", command)
 
+    def test_builds_balanced_topic_intent_queries(self):
+        bridge = self.make_bridge()
+        self.assertEqual(len(bridge.search_specs), 60)
+        self.assertEqual(bridge.search_specs[0]["base_keyword"], "AI Agent")
+        self.assertEqual(bridge.search_specs[0]["intent_group"], "technical_research")
+        self.assertIn("AI Agent 架构", bridge.keywords)
+        self.assertIn("大模型 架构", bridge.keywords)
+        self.assertEqual(len(bridge.keywords), len(set(bridge.keywords)))
     def test_validate_rejects_commit_mismatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base_path = Path(temp_dir)

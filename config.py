@@ -66,6 +66,7 @@ SEARCH_KEYWORDS = [
 ]
 
 # 小红书、知乎使用普通主题词进行搜索和正文关键词前置筛选。
+# 基础主题词。每个主题会与下方三类意图词组合。
 CONTENT_SEARCH_KEYWORDS = [
     "AI Agent",
     "智能体",
@@ -78,7 +79,20 @@ CONTENT_SEARCH_KEYWORDS = [
     "AI Infra",
 ]
 
-# 本次运行进入下游流程的总数量上限。
+# 面向已有基础知识用户的技术检索意图。
+CONTENT_SEARCH_INTENTS = {
+    "technical_research": [
+        "架构", "评测", "benchmark", "framework", "机制", "方法", "对比", "实验",
+    ],
+    "engineering_practice": [
+        "工程实践", "生产环境", "部署", "性能", "延迟", "成本", "可观测性", "implementation",
+    ],
+    "failure_review": [
+        "失败", "局限", "问题", "踩坑", "复盘", "可靠性", "安全", "failure", "tradeoff",
+    ],
+}
+# 防止主题与意图组合过多；0 表示使用全部组合。
+CONTENT_SEARCH_MAX_QUERIES = 60
 CRAWL_LIMIT = 100
 # MediaCrawler 每个关键词最多采集一页，降低平台风控概率。
 MEDIACRAWLER_LIMIT = 20

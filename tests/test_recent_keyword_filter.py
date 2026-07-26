@@ -24,6 +24,26 @@ class RecentKeywordFilterTest(unittest.TestCase):
         self.assertEqual(stats["dropped_missing_time"], 1)
         self.assertEqual(kept[0]["_recent_keyword_matches"], ["ai agent"])
 
+    def test_records_topic_and_intent_matches(self):
+        now = datetime(2026, 7, 25, 12, 0)
+        articles = [{
+            "title": "Agent 架构复盘",
+            "content": "AI Agent 架构和生产环境部署的实践",
+            "publish_time": now - timedelta(hours=1),
+        }]
+        with patch("analyzer.filter.config.CONTENT_SEARCH_KEYWORDS", ["AI Agent"]), patch(
+            "analyzer.filter.config.CONTENT_SEARCH_INTENTS",
+            {
+                "technical_research": ["架构"],
+                "engineering_practice": ["生产环境"],
+            },
+        ):
+            kept, _ = recent_keyword_filter(articles, now=now, max_items=10)
+
+        self.assertEqual(
+            [(item["intent_group"], item["intent_keyword"]) for item in kept[0]["_retrieval_matches"]],
+            [("technical_research", "架构"), ("engineering_practice", "生产环境")],
+        )
     def test_caps_results_after_sorting(self):
         now = datetime(2026, 7, 25, 12, 0)
         articles = [
