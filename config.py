@@ -54,7 +54,7 @@ BLOGGER_WHITELIST = {
 
 # 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）
 # xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
-CRAWL_PLATFORM = "github"
+CRAWL_PLATFORM = os.environ.get("CRAWL_PLATFORM", "github").strip().lower()
 
 # Twitter 使用带技术意图的组合查询。
 SEARCH_KEYWORDS = [
