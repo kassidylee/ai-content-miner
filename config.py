@@ -592,8 +592,20 @@ TWITTER_ENABLE_WECOM = False
 # 5. 企业微信推送配置
 # ============================================================
 
-WECOM_WEBHOOK = os.environ.get("WECOM_WEBHOOK", "")
+# 企业微信机器人 Webhook；WECOM_WEBHOOK_URL 为兼容别名。
+WECOM_WEBHOOK = os.environ.get(
+    "WECOM_WEBHOOK",
+    os.environ.get("WECOM_WEBHOOK_URL", ""),
+)
 REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
+
+# 腾讯云 COS 私有桶报告分发。凭据只从 .env/环境变量读取。
+COS_SECRET_ID = os.environ.get("COS_SECRET_ID", "").strip()
+COS_SECRET_KEY = os.environ.get("COS_SECRET_KEY", "").strip()
+COS_REGION = os.environ.get("COS_REGION", "ap-hongkong").strip()
+COS_BUCKET = os.environ.get("COS_BUCKET", "").strip()
+COS_PREFIX = os.environ.get("COS_PREFIX", "reports/").strip()
+COS_PRESIGNED_EXPIRES = int(os.environ.get("COS_PRESIGNED_EXPIRES", "2592000"))
 
 # ============================================================
 # 6. RAL 来源识别配置
