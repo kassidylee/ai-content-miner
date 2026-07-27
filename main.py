@@ -77,10 +77,16 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
 
     if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        embedding_provider = str(getattr(config, "EMBEDDING_PROVIDER", "openai")).strip().lower()
+        if embedding_provider not in {"openai", "dashscope"}:
+            errors.append("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
         if not str(getattr(config, "EMBEDDING_API_KEY", "")).strip():
-            errors.append("EMBEDDING_API_KEY 未配置")
-        if not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
+            required = "DASHSCOPE_API_KEY" if embedding_provider == "dashscope" else "EMBEDDING_API_KEY"
+            errors.append(f"{required} 未配置")
+        if embedding_provider == "openai" and not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
             errors.append("EMBEDDING_BASE_URL 必须是有效的 http/https URL")
+        if embedding_provider == "dashscope" and importlib.util.find_spec("dashscope") is None:
+            errors.append("缺少 dashscope；请先运行 python -m pip install -r requirements.txt")
         if not str(getattr(config, "EMBEDDING_MODEL", "")).strip():
             errors.append("EMBEDDING_MODEL 不能为空")
     if getattr(bridge, "platform", "") == "github":

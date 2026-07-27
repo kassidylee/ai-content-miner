@@ -34,24 +34,73 @@ def _error_message(exc: Exception) -> str:
     return "；".join(details)
 
 
+class _DashScopeEmbeddings:
+    """Expose DashScope native embeddings through the local client contract."""
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.embeddings = self
+
+    def create(self, model: str, input: Sequence[str]) -> dict:
+        try:
+            from dashscope import TextEmbedding
+            response = TextEmbedding.call(
+                model=model,
+                input=list(input),
+                api_key=self.api_key,
+            )
+        except Exception as exc:
+            raise EmbeddingError(
+                f"DashScope Embedding 请求失败：{_error_message(exc)}"
+            ) from exc
+        if getattr(response, "status_code", None) != 200:
+            raise EmbeddingError(
+                "DashScope Embedding 请求失败："
+                f"code={getattr(response, 'code', '')}；"
+                f"message={getattr(response, 'message', '')}；"
+                f"request_id={getattr(response, 'request_id', '')}"
+            )
+        output = getattr(response, "output", {})
+        entries = output.get("embeddings", []) if isinstance(output, dict) else []
+        data = []
+        for fallback_index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise EmbeddingError("DashScope Embedding 返回了无效向量项")
+            data.append({
+                "index": entry.get("text_index", fallback_index),
+                "embedding": entry.get("embedding"),
+            })
+        return {"data": data}
+
+
 def create_client(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> object:
-    from openai import OpenAI
+    active_provider = str(provider or config.EMBEDDING_PROVIDER).strip().lower()
+    active_key = str(api_key or config.EMBEDDING_API_KEY).strip()
+    if active_provider == "dashscope":
+        return _DashScopeEmbeddings(active_key)
+    if active_provider != "openai":
+        raise EmbeddingError("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
 
+    from openai import OpenAI
     return OpenAI(
-        api_key=api_key or config.EMBEDDING_API_KEY,
+        api_key=active_key,
         base_url=base_url or config.EMBEDDING_BASE_URL,
         timeout=float(config.EMBEDDING_TIMEOUT_SECONDS),
         max_retries=int(config.EMBEDDING_MAX_RETRIES),
     )
 
-
 def _validate_config(require_credentials: bool = True) -> None:
+    provider = str(getattr(config, "EMBEDDING_PROVIDER", "openai")).strip().lower()
+    if provider not in {"openai", "dashscope"}:
+        raise EmbeddingError("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
     if require_credentials and not str(config.EMBEDDING_API_KEY or "").strip():
-        raise EmbeddingError("EMBEDDING_API_KEY 未配置")
-    if require_credentials and not str(config.EMBEDDING_BASE_URL or "").strip():
+        required = "DASHSCOPE_API_KEY" if provider == "dashscope" else "EMBEDDING_API_KEY"
+        raise EmbeddingError(f"{required} 未配置")
+    if provider == "openai" and require_credentials and not str(config.EMBEDDING_BASE_URL or "").strip():
         raise EmbeddingError("EMBEDDING_BASE_URL 未配置")
     if not str(config.EMBEDDING_MODEL or "").strip():
         raise EmbeddingError("EMBEDDING_MODEL 不能为空")
@@ -61,7 +110,6 @@ def _validate_config(require_credentials: bool = True) -> None:
         raise EmbeddingError("EMBEDDING_TIMEOUT_SECONDS 必须大于 0")
     if not isinstance(config.EMBEDDING_MAX_RETRIES, int) or config.EMBEDDING_MAX_RETRIES < 0:
         raise EmbeddingError("EMBEDDING_MAX_RETRIES 必须是非负整数")
-
 
 def _normalize_texts(texts: Union[str, Sequence[str]]) -> List[str]:
     values = [texts] if isinstance(texts, str) else list(texts)

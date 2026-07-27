@@ -107,10 +107,18 @@ ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 # 4.0 通用 Embedding 配置
 # ============================================================
 
-# Embedding Key/Base URL 可与聊天模型完全分离；只从环境变量读取。
-EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
+# Embedding 可使用 OpenAI 兼容接口或阿里云 DashScope 原生 API。
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "openai").strip().lower()
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+EMBEDDING_API_KEY = os.environ.get(
+    "EMBEDDING_API_KEY",
+    DASHSCOPE_API_KEY if EMBEDDING_PROVIDER == "dashscope" else "",
+).strip()
 EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_MODEL = os.environ.get(
+    "EMBEDDING_MODEL",
+    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
+).strip()
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_TIMEOUT_SECONDS = 60
 EMBEDDING_MAX_RETRIES = 2
@@ -150,6 +158,9 @@ GITHUB_RULE_FILTER = {
     "exclude_keywords": [],
 }
 # Embedding 服务可与聊天服务分离；未单独设置时才回退到通用 LLM 配置。
+GITHUB_EMBEDDING_PROVIDER = os.environ.get(
+    "GITHUB_EMBEDDING_PROVIDER", EMBEDDING_PROVIDER
+).strip().lower()
 GITHUB_EMBEDDING_API_KEY = os.environ.get(
     "GITHUB_EMBEDDING_API_KEY", EMBEDDING_API_KEY
 )
@@ -669,7 +680,7 @@ init_directories()
 # 如果 API 服务商不支持默认模型，请在 .env 中填写其实际 Embedding 模型 ID。
 EMBEDDING_MODEL = os.environ.get(
     "EMBEDDING_MODEL",
-    "text-embedding-3-small",
+    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
 ).strip()
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_MAX_CHARS = 6000
