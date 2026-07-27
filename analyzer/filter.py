@@ -9,6 +9,7 @@
 """
 import re
 from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -47,6 +48,166 @@ RAW_SCORE_MAX = (
 )
 DISPLAY_SCORE_NEUTRAL = 6.0
 DISPLAY_SCORE_MAX = 10.0
+
+
+# ============================================================
+# 三日内关键词前置筛选（小红书和知乎）
+# ============================================================
+
+
+def _search_specs() -> List[Dict[str, str]]:
+    topics = getattr(config, "CONTENT_SEARCH_KEYWORDS", [])
+    intents = getattr(config, "CONTENT_SEARCH_INTENTS", {})
+    if isinstance(topics, str):
+        topics = [topics]
+    specs: List[Dict[str, str]] = []
+    seen = set()
+    for topic in topics if isinstance(topics, (list, tuple)) else []:
+        base = str(topic or "").strip()
+        for group, values in intents.items() if isinstance(intents, dict) else []:
+            for value in values if isinstance(values, (list, tuple)) else []:
+                intent = str(value or "").strip()
+                query = f"{base} {intent}".strip()
+                if base and intent and query.casefold() not in seen:
+                    seen.add(query.casefold())
+                    specs.append({"base_keyword": base, "intent_group": str(group), "intent_keyword": intent, "query": query})
+    maximum = int(getattr(config, "CONTENT_SEARCH_MAX_QUERIES", 60))
+    return specs[:maximum] if maximum > 0 else specs
+
+
+def _search_matches(searchable: str) -> List[Dict[str, str]]:
+    lowered = searchable.casefold()
+    return [spec for spec in _search_specs() if spec["base_keyword"].casefold() in lowered and spec["intent_keyword"].casefold() in lowered]
+
+def _keyword_terms() -> List[str]:
+    configured = getattr(
+        config,
+        "CONTENT_SEARCH_KEYWORDS",
+        getattr(config, "SEARCH_KEYWORDS", []),
+    )
+    if isinstance(configured, str):
+        configured = re.split(r"[,，、\\n]+", configured)
+    if not isinstance(configured, (list, tuple)):
+        return []
+    terms: List[str] = []
+    seen = set()
+    for value in configured:
+        term = re.sub(r"\\s+", " ", str(value or "")).strip().casefold()
+        if term and term not in seen:
+            seen.add(term)
+            terms.append(term)
+    return terms
+
+
+def _article_datetime(article: Dict) -> Optional[datetime]:
+    value = article.get("publish_time")
+    if value in (None, ""):
+        raw = article.get("raw", {})
+        if isinstance(raw, dict):
+            for key in (
+                "publish_time", "发布时间", "time", "created_at",
+                "created_time", "create_time", "post_time", "date",
+                "note_time", "publish_date",
+            ):
+                if raw.get(key) not in (None, ""):
+                    value = raw.get(key)
+                    break
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, (int, float)):
+        try:
+            if value > 10_000_000_000:
+                value /= 1000
+            return datetime.fromtimestamp(value)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(
+                    tzinfo=None
+                )
+            except ValueError:
+                for fmt in (
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                    "%Y-%m-%d",
+                    "%Y/%m/%d %H:%M:%S",
+                    "%Y/%m/%d %H:%M",
+                    "%Y/%m/%d",
+                ):
+                    try:
+                        return datetime.strptime(text, fmt)
+                    except ValueError:
+                        continue
+    return None
+
+
+def recent_keyword_filter(
+    articles: List[Dict],
+    days: Optional[int] = None,
+    max_items: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> Tuple[List[Dict], Dict[str, Any]]:
+    """Keep recent, keyword-related posts before expensive semantic scoring."""
+    window_days = int(
+        days if days is not None else getattr(config, "CONTENT_LOOKBACK_DAYS", 3)
+    )
+    limit = int(
+        max_items
+        if max_items is not None
+        else getattr(config, "CONTENT_KEYWORD_MAX_ITEMS", 100)
+    )
+    if window_days <= 0:
+        raise ValueError("CONTENT_LOOKBACK_DAYS 必须是正整数")
+    if limit < 0:
+        raise ValueError("CONTENT_KEYWORD_MAX_ITEMS 不能小于 0")
+
+    current = (now or datetime.now()).replace(tzinfo=None)
+    lower_bound = current - timedelta(days=window_days)
+    terms = _keyword_terms()
+    if limit == 0:
+        limit = len(articles)
+
+    candidates: List[Tuple[datetime, int, Dict, List[str]]] = []
+    stats = {
+        "input": len(articles),
+        "kept": 0,
+        "dropped_old": 0,
+        "dropped_missing_time": 0,
+        "dropped_unrelated": 0,
+        "truncated": 0,
+        "keywords": terms,
+        "days": window_days,
+    }
+
+    for article in articles:
+        published_at = _article_datetime(article)
+        if published_at is None:
+            stats["dropped_missing_time"] += 1
+            continue
+        if published_at < lower_bound or published_at > current:
+            stats["dropped_old"] += 1
+            continue
+        searchable = " ".join(
+            [str(article.get("title", "")), str(article.get("content", ""))]
+        ).casefold()
+        matched = [term for term in terms if term in searchable]
+        if not matched:
+            stats["dropped_unrelated"] += 1
+            continue
+        article["_recent_keyword_matches"] = matched
+        article["_retrieval_matches"] = _search_matches(searchable)
+        candidates.append((published_at, len(matched), article, matched))
+
+    # Recent posts first; among equally recent posts, retain those matching
+    # more configured keywords before applying the downstream cap.
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    selected = candidates[:limit]
+    stats["truncated"] = max(0, len(candidates) - len(selected))
+    stats["kept"] = len(selected)
+    return [item[2] for item in selected], stats
 
 
 # ============================================================

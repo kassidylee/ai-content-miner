@@ -54,9 +54,9 @@ BLOGGER_WHITELIST = {
 
 # 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）
 # xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
-CRAWL_PLATFORM = "github"
+CRAWL_PLATFORM = os.environ.get("CRAWL_PLATFORM", "github").strip().lower()
 
-# Twitter 使用带技术意图的组合查询；其他平台仍会把它们作为普通搜索词。
+# Twitter 使用带技术意图的组合查询。
 SEARCH_KEYWORDS = [
     '"AI Agent" (framework OR benchmark OR "tool calling" OR MCP OR GitHub)',
     '"LLM" (training OR inference OR benchmark OR architecture OR quantization)',
@@ -65,8 +65,41 @@ SEARCH_KEYWORDS = [
     '("AI Agent" OR 智能体) (框架 OR 工具调用 OR MCP OR 开源 OR 实现)',
 ]
 
-# 本次运行进入下游流程的总数量上限。
+# 小红书、知乎使用普通主题词进行搜索和正文关键词前置筛选。
+# 基础主题词。每个主题会与下方三类意图词组合。
+CONTENT_SEARCH_KEYWORDS = [
+    "AI Agent",
+    "智能体",
+    "大模型",
+    "LLM",
+    "强化学习",
+    "量化投资",
+    "推理模型",
+    "多模态",
+    "AI Infra",
+]
+
+# 面向已有基础知识用户的技术检索意图。
+CONTENT_SEARCH_INTENTS = {
+    "technical_research": [
+        "架构", "评测", "benchmark", "framework", "机制", "方法", "对比", "实验",
+    ],
+    "engineering_practice": [
+        "工程实践", "生产环境", "部署", "性能", "延迟", "成本", "可观测性", "implementation",
+    ],
+    "failure_review": [
+        "失败", "局限", "问题", "踩坑", "复盘", "可靠性", "安全", "failure", "tradeoff",
+    ],
+}
+# 防止主题与意图组合过多；0 表示使用全部组合。
+CONTENT_SEARCH_MAX_QUERIES = 60
 CRAWL_LIMIT = 100
+# MediaCrawler 每个关键词最多采集一页，降低平台风控概率。
+MEDIACRAWLER_LIMIT = 20
+# 小红书、知乎进入评分前只保留最近三天且命中关键词的内容。
+CONTENT_LOOKBACK_DAYS = 3
+# 0 表示不限制；默认限制 100 篇，防止一次运行触发过多 Embedding/LLM 请求。
+CONTENT_KEYWORD_MAX_ITEMS = 100
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 
@@ -74,14 +107,18 @@ ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 # 4.0 通用 Embedding 配置
 # ============================================================
 
-# Embedding Key/Base URL 可与聊天模型完全分离；只从环境变量读取。
-EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
-EMBEDDING_BASE_URL = os.environ.get(
-    "EMBEDDING_BASE_URL", "https://api.openai.com/v1"
-)
+# Embedding 可使用 OpenAI 兼容接口或阿里云 DashScope 原生 API。
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "openai").strip().lower()
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+EMBEDDING_API_KEY = os.environ.get(
+    "EMBEDDING_API_KEY",
+    DASHSCOPE_API_KEY if EMBEDDING_PROVIDER == "dashscope" else "",
+).strip()
+EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
 EMBEDDING_MODEL = os.environ.get(
-    "EMBEDDING_MODEL", "text-embedding-3-small"
-)
+    "EMBEDDING_MODEL",
+    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
+).strip()
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_TIMEOUT_SECONDS = 60
 EMBEDDING_MAX_RETRIES = 2
@@ -93,6 +130,17 @@ EMBEDDING_MAX_RETRIES = 2
 # 令牌只从环境变量读取，禁止写入仓库配置或提交到 Git。
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_API_BASE_URL = "https://api.github.com"
+# GitHub 使用简单关键词；不要复用 Twitter 的 AND/OR 查询表达式。
+GITHUB_SEARCH_KEYWORDS = [
+    "AI Agent",
+    "智能体",
+    "大模型",
+    "LLM",
+    "强化学习",
+    "推理模型",
+    "多模态",
+    "AI Infra",
+]
 GITHUB_RESULTS_PER_QUERY = 20
 GITHUB_LOOKBACK_DAYS = 7
 GITHUB_MIN_STARS = 0
@@ -110,6 +158,9 @@ GITHUB_RULE_FILTER = {
     "exclude_keywords": [],
 }
 # Embedding 服务可与聊天服务分离；未单独设置时才回退到通用 LLM 配置。
+GITHUB_EMBEDDING_PROVIDER = os.environ.get(
+    "GITHUB_EMBEDDING_PROVIDER", EMBEDDING_PROVIDER
+).strip().lower()
 GITHUB_EMBEDDING_API_KEY = os.environ.get(
     "GITHUB_EMBEDDING_API_KEY", EMBEDDING_API_KEY
 )
@@ -566,8 +617,20 @@ TWITTER_ENABLE_WECOM = False
 # 5. 企业微信推送配置
 # ============================================================
 
-WECOM_WEBHOOK = os.environ.get("WECOM_WEBHOOK", "")
+# 企业微信机器人 Webhook；WECOM_WEBHOOK_URL 为兼容别名。
+WECOM_WEBHOOK = os.environ.get(
+    "WECOM_WEBHOOK",
+    os.environ.get("WECOM_WEBHOOK_URL", ""),
+)
 REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
+
+# 腾讯云 COS 私有桶报告分发。凭据只从 .env/环境变量读取。
+COS_SECRET_ID = os.environ.get("COS_SECRET_ID", "").strip()
+COS_SECRET_KEY = os.environ.get("COS_SECRET_KEY", "").strip()
+COS_REGION = os.environ.get("COS_REGION", "ap-hongkong").strip()
+COS_BUCKET = os.environ.get("COS_BUCKET", "").strip()
+COS_PREFIX = os.environ.get("COS_PREFIX", "reports/").strip()
+COS_PRESIGNED_EXPIRES = int(os.environ.get("COS_PRESIGNED_EXPIRES", "2592000"))
 
 # ============================================================
 # 6. RAL 来源识别配置
@@ -617,7 +680,7 @@ init_directories()
 # 如果 API 服务商不支持默认模型，请在 .env 中填写其实际 Embedding 模型 ID。
 EMBEDDING_MODEL = os.environ.get(
     "EMBEDDING_MODEL",
-    "text-embedding-3-small",
+    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
 ).strip()
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_MAX_CHARS = 6000

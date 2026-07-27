@@ -41,8 +41,11 @@ class MediaCrawlerBridge:
         self.base_path = _resolve_project_path(config.MEDIACRAWLER_PATH)
         self.platform = self._platform_mapping(config.CRAWL_PLATFORM)
         self.crawl_type = config.CRAWL_TYPE
-        self.keywords = [str(keyword).strip() for keyword in config.SEARCH_KEYWORDS]
-        self.limit = getattr(config, "CRAWL_LIMIT", 20)
+        self.search_specs = self._build_search_specs()
+        self.keywords = [spec["query"] for spec in self.search_specs]
+        self.limit = getattr(
+            config, "MEDIACRAWLER_LIMIT", getattr(config, "CRAWL_LIMIT", 20)
+        )
         self.login_type = getattr(config, "MEDIACRAWLER_LOGIN_TYPE", "qrcode")
         self.expected_commit = getattr(config, "MEDIACRAWLER_COMMIT", "")
         self.timeout = getattr(config, "MEDIACRAWLER_TIMEOUT_SECONDS", 900)
@@ -68,8 +71,8 @@ class MediaCrawlerBridge:
                 f"MEDIACRAWLER_LOGIN_TYPE={self.login_type!r} 尚未安全接入；"
                 "当前仅支持 qrcode、phone"
             )
-        if not self.keywords or any(not keyword for keyword in self.keywords):
-            errors.append("SEARCH_KEYWORDS 必须至少包含一个非空关键词")
+        if not self.search_specs:
+            errors.append("CONTENT_SEARCH_KEYWORDS 与 CONTENT_SEARCH_INTENTS 不能都为空")
         if not isinstance(self.limit, int) or self.limit <= 0:
             errors.append("CRAWL_LIMIT 必须是正整数")
         if not isinstance(self.timeout, (int, float)) or self.timeout <= 0:
@@ -167,12 +170,20 @@ class MediaCrawlerBridge:
             )
 
         if completed.returncode != 0:
+            diagnostics = self._diagnostics(completed)
+            error = f"MediaCrawler 退出码为 {completed.returncode}"
+            if diagnostics:
+                error += f"；子进程输出：{diagnostics}"
+            error += (
+                "。请检查 MediaCrawler 登录状态、验证码/风控响应、"
+                "当前 IP 网络和请求频率"
+            )
             return CrawlRunResult(
                 success=False,
                 command=tuple(command),
                 output_dir=output_dir,
                 returncode=completed.returncode,
-                error=f"MediaCrawler 退出码为 {completed.returncode}",
+                error=error,
             )
 
         data_files = self._find_content_files(output_dir)
@@ -193,10 +204,55 @@ class MediaCrawlerBridge:
             returncode=completed.returncode,
         )
 
+    @staticmethod
+    def _diagnostics(completed: subprocess.CompletedProcess) -> str:
+        """Return a bounded child-process tail without flooding the workflow log."""
+        parts = []
+        for value in (getattr(completed, "stdout", ""), getattr(completed, "stderr", "")):
+            if value:
+                parts.extend(str(value).splitlines())
+        return " | ".join(line.strip() for line in parts[-12:] if line.strip())[-3000:]
+
     def acknowledge(self) -> str:
         """MediaCrawler 不维护额外的本地已处理状态。"""
         return ""
 
+    @staticmethod
+    def _build_search_specs() -> List[dict]:
+        topics = getattr(config, "CONTENT_SEARCH_KEYWORDS", [])
+        intents = getattr(config, "CONTENT_SEARCH_INTENTS", {})
+        if isinstance(topics, str):
+            topics = [topics]
+        specs: List[dict] = []
+        seen = set()
+        for topic in topics if isinstance(topics, (list, tuple)) else []:
+            base = str(topic or "").strip()
+            if not base:
+                continue
+            for group, values in intents.items() if isinstance(intents, dict) else []:
+                for value in values if isinstance(values, (list, tuple)) else []:
+                    intent = str(value or "").strip()
+                    query = f"{base} {intent}".strip()
+                    key = query.casefold()
+                    if intent and key not in seen:
+                        seen.add(key)
+                        specs.append({
+                            "base_keyword": base,
+                            "intent_group": str(group),
+                            "intent_keyword": intent,
+                            "query": query,
+                        })
+        # Round-robin by topic so a cap does not starve later topics.
+        grouped = {}
+        for spec in specs:
+            grouped.setdefault(spec["base_keyword"], []).append(spec)
+        balanced = []
+        while any(grouped.values()):
+            for topic in list(grouped):
+                if grouped[topic]:
+                    balanced.append(grouped[topic].pop(0))
+        maximum = int(getattr(config, "CONTENT_SEARCH_MAX_QUERIES", 90))
+        return balanced[:maximum] if maximum > 0 else balanced
     def _find_content_files(self, output_dir: Path) -> List[Path]:
         content_dir = output_dir / self.platform / "jsonl"
         pattern = f"{self.crawl_type}_contents_*.jsonl"

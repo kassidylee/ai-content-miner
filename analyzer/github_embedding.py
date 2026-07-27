@@ -106,18 +106,21 @@ def validate_github_embedding_config(require_credentials: bool = True) -> None:
         raise GithubEmbeddingError(
             "GITHUB_EMBEDDING_FILTER_MODE 只能是 shadow 或 enforce"
         )
+    provider = str(getattr(config, "GITHUB_EMBEDDING_PROVIDER", "openai")).strip().lower()
+    if provider not in {"openai", "dashscope"}:
+        raise GithubEmbeddingError("GITHUB_EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
     if not str(config.GITHUB_EMBEDDING_MODEL).strip():
         raise GithubEmbeddingError("GITHUB_EMBEDDING_MODEL 不能为空")
     if require_credentials:
         api_key = str(config.GITHUB_EMBEDDING_API_KEY or "").strip()
         if not api_key:
-            raise GithubEmbeddingError("GITHUB_EMBEDDING_API_KEY 未配置")
-        base_url = str(config.GITHUB_EMBEDDING_BASE_URL or "").strip()
-        parsed = urlparse(base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise GithubEmbeddingError(
-                "GITHUB_EMBEDDING_BASE_URL 必须是有效的 http/https URL"
-            )
+            required = "DASHSCOPE_API_KEY" if provider == "dashscope" else "GITHUB_EMBEDDING_API_KEY"
+            raise GithubEmbeddingError(f"{required} 未配置")
+        if provider == "openai":
+            base_url = str(config.GITHUB_EMBEDDING_BASE_URL or "").strip()
+            parsed = urlparse(base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise GithubEmbeddingError("GITHUB_EMBEDDING_BASE_URL 必须是有效的 http/https URL")
     if (
         not isinstance(config.GITHUB_EMBEDDING_BATCH_SIZE, int)
         or config.GITHUB_EMBEDDING_BATCH_SIZE <= 0
@@ -171,6 +174,7 @@ def probe_github_embedding_service(client: Optional[object] = None) -> int:
     active_client = client or create_client(
         api_key=config.GITHUB_EMBEDDING_API_KEY,
         base_url=config.GITHUB_EMBEDDING_BASE_URL,
+        provider=config.GITHUB_EMBEDDING_PROVIDER,
     )
     vectors = _embed_texts(active_client, [_keywords()[0]])
     if not vectors or not vectors[0]:
@@ -194,6 +198,7 @@ def apply_github_embedding_filter(
         client = create_client(
             api_key=config.GITHUB_EMBEDDING_API_KEY,
             base_url=config.GITHUB_EMBEDDING_BASE_URL,
+        provider=config.GITHUB_EMBEDDING_PROVIDER,
         )
 
     passed: List[Dict] = []
