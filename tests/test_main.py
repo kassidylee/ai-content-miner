@@ -33,6 +33,41 @@ class MainTest(unittest.TestCase):
             errors,
         )
 
+    def test_runtime_config_validates_reddit_pipeline(self):
+        bridge = SimpleNamespace(
+            platform="reddit",
+            validate=lambda: [],
+        )
+        with patch.object(
+            main.config,
+            "API_KEY",
+            "test-key",
+        ), patch.object(
+            main.config,
+            "MODEL_NAME",
+            "test-model",
+        ), patch.object(
+            main.config,
+            "WECOM_WEBHOOK",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+        ), patch.object(
+            main.config,
+            "REPORT_BASE_URL",
+            "https://reports.example.org",
+        ), patch(
+            "analyzer.reddit_rules.validate_reddit_rule_config",
+        ) as validate_rules, patch(
+            "analyzer.reddit_embedding.validate_reddit_embedding_config",
+        ) as validate_embedding, patch(
+            "analyzer.reddit_quality.validate_reddit_quality_config",
+        ) as validate_quality:
+            errors = main.validate_runtime_config(bridge)
+
+        self.assertEqual(errors, [])
+        validate_rules.assert_called_once_with()
+        validate_embedding.assert_called_once_with()
+        validate_quality.assert_called_once_with()
+
     def test_crawler_failure_returns_nonzero_and_stops_pipeline(self):
         bridge = SimpleNamespace(
             platform="xhs",
@@ -124,6 +159,79 @@ class MainTest(unittest.TestCase):
                     enable_author_profile=True,
                 )
                 report_generator.assert_called_once()
+
+    def test_reddit_routes_to_dedicated_pipeline(self):
+        article = {"title": "Reddit item"}
+        bridge = SimpleNamespace(
+            platform="reddit",
+            run=lambda: CrawlRunResult(
+                success=True,
+                data_files=("current.jsonl",),
+            ),
+            acknowledge=lambda: "",
+        )
+        scored = {
+            "article": article,
+            "total_score": 8.0,
+        }
+        with patch(
+            "main.load_articles",
+            return_value=[article],
+        ), patch(
+            "main._run_reddit_filters",
+            return_value=([scored], 0),
+        ) as reddit_filters, patch(
+            "main.multi_stage_filter",
+        ) as four_stage_filter, patch(
+            "main.generate_reports",
+            return_value=([], 0),
+        ):
+            exit_code = main.run_workflow(bridge)
+
+        self.assertEqual(exit_code, main.EXIT_OK)
+        reddit_filters.assert_called_once_with([article])
+        four_stage_filter.assert_not_called()
+
+    def test_reddit_results_map_to_report_dimensions(self):
+        quality = {
+            "stage": "quality",
+            "score": 7.8,
+            "components": {
+                "relevance": 1.8,
+                "depth": 1.5,
+                "evidence": 1.2,
+                "freshness": 2.0,
+                "source_quality": 1.8,
+            },
+            "details": {
+                "best_topic_label": "AI Agent",
+            },
+        }
+        article = {
+            "title": "Reddit item",
+            "content": "A useful technical discussion",
+            "reddit_filter_metadata": {
+                "stages": [quality],
+                "final_decision": "keep",
+                "final_reason_codes": [
+                    "REDDIT_FILTER_PIPELINE_PASSED"
+                ],
+            },
+        }
+        with patch(
+            "analyzer.reddit_pipeline.run_reddit_filters",
+            return_value={
+                "passed": [article],
+                "dropped": [],
+            },
+        ):
+            passed, dropped_count = main._run_reddit_filters([article])
+
+        self.assertEqual(dropped_count, 0)
+        self.assertEqual(passed[0]["total_score"], 7.8)
+        self.assertEqual(passed[0]["category"], "AI Agent")
+        self.assertEqual(len(passed[0]["dimensions"]), 5)
+        self.assertEqual(passed[0]["scores"][0], 1.8)
 
     def test_generate_reports_uses_normalized_zero_to_ten_threshold(self):
         below_threshold = {

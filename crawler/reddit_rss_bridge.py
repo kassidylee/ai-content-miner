@@ -154,7 +154,16 @@ class RedditRssBridge:
     ) -> None:
         self.platform = "reddit"
         self.configured_platform = str(config.CRAWL_PLATFORM).strip().casefold()
-        self.keywords = [str(keyword).strip() for keyword in config.SEARCH_KEYWORDS]
+        configured_keywords = getattr(
+            config,
+            "REDDIT_RSS_KEYWORDS",
+            config.SEARCH_KEYWORDS,
+        )
+        if isinstance(configured_keywords, str):
+            configured_keywords = [configured_keywords]
+        self.keywords = [
+            str(keyword).strip() for keyword in configured_keywords
+        ]
         raw_subreddits = getattr(config, "REDDIT_RSS_SUBREDDITS", [])
         if isinstance(raw_subreddits, str):
             raw_subreddits = [raw_subreddits]

@@ -52,8 +52,8 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）
-# xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）/ reddit
+# xhs、zhihu 使用 MediaCrawler；其余平台使用各自独立的采集器。
 CRAWL_PLATFORM = "github"
 
 # Twitter 使用带技术意图的组合查询；其他平台仍会把它们作为普通搜索词。
@@ -169,8 +169,18 @@ TWSCRAPE_SEEN_ID_LIMIT = 5000
 # ============================================================
 
 # RSS 不提供帖子分数、点赞比例、评论数或 flair。采集器读取明确社区的
-# new/.rss，再在本地按 SEARCH_KEYWORDS、时间窗口和帖子 ID 过滤。
+# new/.rss，再在本地按专用关键词、时间窗口和帖子 ID 过滤。
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+REDDIT_RSS_KEYWORDS = [
+    "LLM",
+    "model",
+    "agent",
+    "inference",
+    "quantization",
+    "大模型",
+    "推理",
+    "量化",
+]
 REDDIT_RSS_RESULTS_PER_SUBREDDIT = 10
 REDDIT_RSS_LOOKBACK_HOURS = 168
 REDDIT_RSS_REQUEST_TIMEOUT_SECONDS = 30
@@ -191,6 +201,71 @@ REDDIT_RSS_STATE_FILE = os.path.join(
     DATA_DIR, "state", "reddit_rss_seen_ids.json"
 )
 REDDIT_RSS_SEEN_ID_LIMIT = 5000
+
+# Reddit 专用筛选：内容与来源规则 -> 主题 Embedding -> 内容质量评分。
+# RSS 缺少互动字段，因此质量分不读取 score、评论数或点赞比例。
+REDDIT_RULE_FILTER = {
+    "min_content_chars": 40,
+    "exclude_keywords": [],
+}
+REDDIT_EMBEDDING_API_KEY = os.environ.get(
+    "REDDIT_EMBEDDING_API_KEY", EMBEDDING_API_KEY
+)
+REDDIT_EMBEDDING_BASE_URL = os.environ.get(
+    "REDDIT_EMBEDDING_BASE_URL", EMBEDDING_BASE_URL
+)
+REDDIT_EMBEDDING_MODEL = os.environ.get(
+    "REDDIT_EMBEDDING_MODEL", EMBEDDING_MODEL
+)
+REDDIT_EMBEDDING_BATCH_SIZE = 20
+REDDIT_EMBEDDING_MAX_CHARS = 6000
+REDDIT_EMBEDDING_FILTER_MODE = "enforce"  # shadow | enforce
+REDDIT_INTEREST_TOPICS = [
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "description": (
+            "AI Agent、智能体框架、工具调用、任务规划、"
+            "多智能体协作、Agent 工作流和相关开源项目"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "description": (
+            "大语言模型的复杂推理、思维链、test-time compute、"
+            "数学推理、代码推理和推理模型训练"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "model-systems",
+        "label": "模型系统",
+        "description": (
+            "大模型训练、推理服务、模型部署、量化、微调、"
+            "GPU 优化、分布式系统和 AI 基础设施"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "open-models",
+        "label": "开放模型",
+        "description": (
+            "开放权重大语言模型、模型发布、基准测试、"
+            "模型能力对比、复现实验和开源实现"
+        ),
+        "threshold": 0.35,
+    },
+]
+REDDIT_QUALITY_WEIGHTS = {
+    "relevance": 0.35,
+    "depth": 0.25,
+    "evidence": 0.20,
+    "freshness": 0.10,
+    "source_quality": 0.10,
+}
+REDDIT_QUALITY_MIN_SCORE = 6.0
 
 # ============================================================
 # 4.4 Twitter 专用结构化处理

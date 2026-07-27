@@ -53,12 +53,29 @@ RSS 不提供：
 → 时间窗口筛选
 → 帖子 ID 去重
 → 统一 JSONL
-→ 现有非 Twitter 分析与输出流程
+→ Reddit 内容与来源规则
+→ Reddit 多主题 Embedding
+→ Reddit 五维质量评分
+→ 现有输出与通知流程
 ```
 
 关键词筛选只在本地进行，不使用 Reddit 搜索 feed。默认只配置
 `LocalLLaMA` 一个社区；配置多个社区时，采集器会在请求之间至少等待 31 秒，并根据
 响应中的 `x-ratelimit-reset` 延长等待。
+
+## 专用筛选与评分
+
+Reddit 不再进入小红书/知乎使用的互动质量和博主画像层。专用 pipeline 分为：
+
+1. 内容与来源规则：校验 Reddit 来源、RSS 采集方式、帖子 ID、URL、subreddit、
+   最低内容长度和批次内重复项；
+2. 主题 Embedding：比较标题、正文、subreddit 和外部来源域名与
+   `REDDIT_INTEREST_TOPICS`；
+3. 质量评分：按主题相关性 35%、信息深度 25%、证据可追溯性 20%、时效性 10%、
+   来源完整性 10% 计算 0–10 分。
+
+质量评分始终写入 `interaction_metrics_used: false`。即使将来其他采集器提供互动数据，
+也不会在没有显式设计和校准的情况下改变 RSS 内容得分。
 
 ## 运行
 
@@ -74,6 +91,7 @@ RSS 不提供：
 ```python
 CRAWL_PLATFORM = "reddit"
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+REDDIT_RSS_KEYWORDS = ["LLM", "model", "agent", "inference"]
 ```
 
 然后运行：

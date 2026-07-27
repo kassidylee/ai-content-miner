@@ -15,8 +15,9 @@
 - GitHub 使用官方 REST API 搜索最近活跃的公开仓库，仅对最终候选读取 README，
   并通过稳定仓库 ID 去重。首版不采集 Issues、Releases 或 Discussions。
 - Reddit 通过指定社区的 `new/.rss` 获取最新帖子，在本地执行关键词、时间窗口和
-  帖子 ID 过滤，随后进入非 Twitter 的四层筛选与输出流程。
-- 主入口对 Twitter 做显式路由；Twitter 流程不会误入小红书、知乎或 Reddit 流程。
+  帖子 ID 过滤，随后进入独立的内容规则、主题 Embedding 和质量评分流程。RSS
+  缺失的互动指标不会按零分处罚。
+- 主入口对 Twitter、GitHub 和 Reddit 的专用流程做显式路由，平台之间不会串用筛选器。
 
 ### 适用场景
 
@@ -29,8 +30,8 @@
 | 功能 | 说明 |
 | --- | --- |
 | 数据爬取 | 小红书、知乎使用 MediaCrawler；X 使用实验性的 twscrape；Reddit 使用 Atom/RSS。 |
-| 四层筛选 | 非 Twitter 内容依次执行规则、语义去重、互动质量和博主画像筛选。 |
-| 综合评分 | 将四层乘积分数正规化到 0–10；中性组合为 6 分，原始分数保留用于审计。 |
+| 平台筛选 | 小红书/知乎使用四层筛选；GitHub、Reddit 和 Twitter 使用各自隔离的专用流程。 |
+| 综合评分 | 各平台输出可审计的 0–10 综合分；Reddit 不使用 RSS 不提供的互动指标。 |
 | Twitter 信息流 | 使用独立三层筛选、极简摘要、结构化 JSONL 和聚合页面。 |
 | 多模式输出 | 短内容生成文本卡片（`.txt`）；中长内容生成完整 HTML 研报（`.html`）。 |
 | 企业微信推送 | 使用 Markdown V2 格式推送消息，并附带在线阅读链接。 |
@@ -43,7 +44,8 @@
 - Python 3.9 或更高版本；使用 X/twscrape 时需要 Python 3.10 或更高版本
 - [uv](https://docs.astral.sh/uv/)（用于安装并运行 MediaCrawler）
 - OpenAI API Key，或兼容接口的 API Key
-- 小红书、知乎和 GitHub 完整流程需要企业微信机器人 Webhook；Twitter 通知默认关闭
+- 小红书、知乎、GitHub 和 Reddit 完整流程需要企业微信机器人 Webhook；Twitter
+  通知默认关闭
 - GitHub 流程需要从环境变量读取的 `GITHUB_TOKEN`
 
 ### 1. 克隆项目
@@ -84,7 +86,7 @@ $env:AI_MODEL_NAME = "your-chat-model"
 $env:WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
 ```
 
-通用 Embedding 配置（小红书、知乎，以及未单独覆盖的 GitHub）使用以下环境变量：
+通用 Embedding 配置（小红书、知乎，以及未单独覆盖的 GitHub/Reddit）使用以下环境变量：
 
 ```powershell
 $env:EMBEDDING_API_KEY = "your-embedding-api-key"
@@ -98,6 +100,16 @@ GitHub Embedding 可以使用另一家实际支持 `/embeddings` 的服务：
 $env:GITHUB_EMBEDDING_API_KEY = "your-embedding-api-key"
 $env:GITHUB_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 $env:GITHUB_EMBEDDING_MODEL = "text-embedding-3-small"
+```
+
+Reddit 也可以单独覆盖 Embedding 服务：
+
+```powershell
+$env:REDDIT_EMBEDDING_API_KEY = "your-embedding-api-key"
+$env:REDDIT_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+$env:REDDIT_EMBEDDING_MODEL = "text-embedding-3-small"
+```
+
 复制环境变量模板，并在本地 `.env` 中填写敏感配置：
 
 ```bash
@@ -249,6 +261,7 @@ Reddit 不经过 MediaCrawler。当前方案读取配置中明确社区的 `new/
 ```python
 CRAWL_PLATFORM = "reddit"
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
+REDDIT_RSS_KEYWORDS = ["LLM", "model", "agent", "inference"]
 ```
 
 2026-07-24 当前开发机真实测试中，RSS 返回 HTTP 200，但响应额度约 30 秒才恢复一次。
@@ -264,7 +277,7 @@ python3 main.py
 
 `--check-config` 只检查必填配置和当前采集器。小红书、知乎会检查 MediaCrawler 路径、
 commit 和运行解释器；X 会检查 twscrape 版本、本地会话数据库和已处理状态；Reddit
-会检查社区列表、RSS 请求参数、User-Agent 和已处理状态，
+会检查社区列表、RSS 请求参数、User-Agent、专用筛选配置、Embedding 凭证和已处理状态，
 不会启动爬虫、调用模型或发送企业微信消息。配置、爬虫退出码、当次无数据或推送
 失败时，主程序均返回非零退出状态。
 
@@ -281,7 +294,11 @@ ai-content-miner/
 │
 ├── analyzer/                   # 分析模块
 │   ├── __init__.py
-│   ├── filter.py               # 非 Twitter 四层筛选
+│   ├── filter.py               # 小红书/知乎四层筛选
+│   ├── reddit_rules.py         # Reddit 内容与来源规则
+│   ├── reddit_embedding.py     # Reddit 多主题语义筛选
+│   ├── reddit_quality.py       # Reddit 无互动依赖的质量评分
+│   ├── reddit_pipeline.py      # Reddit 三层筛选编排
 │   ├── twitter_rules.py        # Twitter 第一层规则
 │   ├── twitter_embedding.py    # Twitter 多主题语义筛选
 │   ├── twitter_comments.py     # Twitter 回复区筛选
@@ -362,9 +379,12 @@ twscrape
 Reddit：
 指定 subreddit 的 new/.rss
   -> Atom 解析和正文清洗
-  -> 本地关键词、时间窗口和 ID 过滤
+  -> Reddit 专用关键词、时间窗口和 ID 过滤
   -> 本次运行 JSONL
-  -> 非 Twitter 四层筛选与输出流程
+  -> 内容与来源规则
+  -> 多主题 Embedding 相关性筛选
+  -> 相关性、深度、证据、时效和来源质量评分
+  -> 逐条输出与企业微信推送
 ```
 
 每次 MediaCrawler 调用都通过 CLI 传入平台、关键词、数量限制、JSONL 格式和
@@ -380,6 +400,8 @@ twscrape 同样为每次执行建立独立输出目录，只读取该次搜索�
 
 Reddit RSS 同样只读取本次运行的数据。一个社区暂时失败时会继续其他社区；全部社区
 失败时本次运行返回失败。多社区之间默认至少等待 31 秒，并尊重响应中的限流重置时间。
+筛选阶段只使用 RSS 确实提供的正文、链接、作者、社区和发布时间；当
+`metrics_available=false` 时不会使用分数、点赞比例或评论数。
 
 ## 输出模式
 
@@ -460,9 +482,18 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `TWSCRAPE_RESULTS_PER_QUERY` | 每个 X 关键词最多读取条数 | `50` |
 | `TWSCRAPE_LOOKBACK_HOURS` | X 帖子的本地时间窗口 | `168` |
 | `REDDIT_RSS_SUBREDDITS` | Reddit 明确社区列表 | `["LocalLLaMA"]` |
+| `REDDIT_RSS_KEYWORDS` | Reddit RSS 本地匹配关键词 | `["LLM", "model", "agent"]` |
 | `REDDIT_RSS_RESULTS_PER_SUBREDDIT` | 每个社区最多读取的 feed 条目 | `10` |
 | `REDDIT_RSS_REQUEST_INTERVAL_SECONDS` | 多社区请求间隔 | `31` |
 | `REDDIT_RSS_LOOKBACK_HOURS` | Reddit 本地时间窗口 | `168` |
+| `REDDIT_RULE_FILTER` | Reddit 内容长度和排除词规则 | 字典 |
+| `REDDIT_EMBEDDING_API_KEY` | Reddit Embedding 专用 Key；默认回退通用配置 | - |
+| `REDDIT_EMBEDDING_BASE_URL` | Reddit Embedding API 地址 | `https://api.openai.com/v1` |
+| `REDDIT_EMBEDDING_MODEL` | Reddit 主题相似度模型 | `text-embedding-3-small` |
+| `REDDIT_INTEREST_TOPICS` | Reddit Embedding 主题及独立阈值 | 列表 |
+| `REDDIT_EMBEDDING_FILTER_MODE` | Reddit 语义筛选模式 | `enforce`、`shadow` |
+| `REDDIT_QUALITY_WEIGHTS` | Reddit 五维质量评分权重 | 字典 |
+| `REDDIT_QUALITY_MIN_SCORE` | Reddit 专用质量筛选最低分 | `6.0` |
 | `TWITTER_RULE_FILTER` | 仅供 Twitter 使用的第一层规则 | 字典 |
 | `TWITTER_EMBEDDING_ENABLED` | 是否启用 Twitter Embedding 第二层筛选 | `False` |
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
@@ -477,7 +508,7 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
   专用规则、Embedding、回复区筛选或聚合页面。
   - GitHub 首版只发现公开仓库；Releases 是下一种建议接入的数据类型，Issues 和
   Discussions 保持独立。
-- 小红书、知乎和 Reddit 使用非 Twitter 四层筛选。当前主入口没有加载历史对比样本，
+- 小红书、知乎使用四层筛选。当前主入口没有加载历史对比样本，
   因此语义去重层会明确记录为跳过；规则、互动质量和博主画像层仍正常执行。
 - 四层筛选保留原始乘积分数，并将中性组合映射为 6 分、最高组合映射为 10 分。
   `SCORE_THRESHOLD` 只与正规化后的 0–10 分比较。
@@ -490,7 +521,8 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 - X 仅接入 twscrape 的只读关键词搜索，不包含发帖、点赞、关注、私信、账号池扩容、
   CAPTCHA 绕过或代理轮换。
 - Reddit 仅低频读取配置社区的 `new/.rss`，不使用 OAuth、PRAW、登录 Cookie、
-  搜索 feed 或代理轮换；RSS 不提供互动指标，访问规则变化或限流会使采集失败。
+  搜索 feed 或代理轮换；其独立质量评分明确忽略 RSS 不提供的互动指标。访问规则变化
+  或限流仍会使采集失败。
 - twscrape 使用非公开 X GraphQL 接口，可能因 X 改版、Cookie 失效、限流或账号验证而
   中断；任何失败都会返回非零状态，不会显示为采集成功。
 - X 使用独立三层筛选和结构化聚合页，不调用非 Twitter 四层筛选或逐条报告生成器。

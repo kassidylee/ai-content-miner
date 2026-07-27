@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from xml.sax.saxutils import escape
 
 from crawler.reddit_rss_bridge import RedditRssBridge
@@ -95,6 +96,15 @@ class RedditRssBridgeTest(unittest.TestCase):
         bridge.request_interval = 31
         bridge.max_response_bytes = 1_000_000
         return bridge
+
+    def test_uses_dedicated_reddit_keywords_and_accepts_single_string(self):
+        with patch(
+            "crawler.reddit_rss_bridge.config.REDDIT_RSS_KEYWORDS",
+            "model",
+        ):
+            bridge = RedditRssBridge()
+
+        self.assertEqual(bridge.keywords, ["model"])
 
     def test_validate_requires_explicit_subreddit_and_user_agent(self):
         bridge = RedditRssBridge()

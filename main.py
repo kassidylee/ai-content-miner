@@ -1,7 +1,7 @@
 """AI Content Miner 工作流主入口。
 
 职责仅限程序编排：配置检查 → 按平台路由 → 本次爬取 → 数据加载
-→ 四层筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
+→ 平台筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
 """
 
 from __future__ import annotations
@@ -94,6 +94,20 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             validate_github_quality_config()
         except (GithubEmbeddingError, ValueError) as exc:
             errors.append(str(exc))
+    if getattr(bridge, "platform", "") == "reddit":
+        from analyzer.reddit_embedding import (
+            RedditEmbeddingError,
+            validate_reddit_embedding_config,
+        )
+        from analyzer.reddit_quality import validate_reddit_quality_config
+        from analyzer.reddit_rules import validate_reddit_rule_config
+
+        try:
+            validate_reddit_rule_config()
+            validate_reddit_embedding_config()
+            validate_reddit_quality_config()
+        except (RedditEmbeddingError, ValueError) as exc:
+            errors.append(str(exc))
             
     score_threshold = getattr(config, "SCORE_THRESHOLD", None)
     if (
@@ -108,7 +122,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
 
 
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
-    """仅对通过四层筛选且 0–10 综合分达标的文章生成输出。"""
+    """仅对通过平台筛选且 0–10 综合分达标的文章生成输出。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
@@ -207,6 +221,79 @@ def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
         )
     return passed_items, len(filtered["dropped"])
 
+
+def _run_reddit_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
+    """运行 Reddit 专用筛选，并转换为已有报告生成器输入。"""
+    from analyzer.reddit_pipeline import run_reddit_filters
+
+    filtered = run_reddit_filters(articles)
+    passed_items: List[Dict] = []
+    for index, article in enumerate(filtered["passed"], start=1):
+        metadata = article.get("reddit_filter_metadata", {})
+        stages = metadata.get("stages", []) if isinstance(metadata, dict) else []
+        quality = next(
+            (
+                stage for stage in reversed(stages)
+                if isinstance(stage, dict) and stage.get("stage") == "quality"
+            ),
+            {},
+        )
+        total_score = float(quality.get("score", 0.0) or 0.0)
+        components = quality.get("components", {})
+        details = quality.get("details", {})
+        topic_label = (
+            str(details.get("best_topic_label", "") or "")
+            if isinstance(details, dict)
+            else ""
+        )
+        content = str(article.get("content", "") or "").strip()
+        passed_items.append(
+            {
+                "article": article,
+                "total_score": total_score,
+                "filter_result": metadata,
+                "blogger_weight": 1.0,
+                "dimensions": [
+                    "主题相关性",
+                    "信息深度",
+                    "证据可追溯性",
+                    "时效性",
+                    "来源完整性",
+                ],
+                "scores": [
+                    float(components.get("relevance", 0.0)),
+                    float(components.get("depth", 0.0)),
+                    float(components.get("evidence", 0.0)),
+                    float(components.get("freshness", 0.0)),
+                    float(components.get("source_quality", 0.0)),
+                ],
+                "summary": (
+                    content or str(article.get("title", "") or "")
+                )[:180],
+                "category": topic_label or "Reddit 技术讨论",
+            }
+        )
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ✅ 通过 [{index}/{len(filtered['passed'])}] {title} "
+            f"→ Reddit 质量分 {total_score:.2f}"
+        )
+
+    for index, article in enumerate(filtered["dropped"], start=1):
+        metadata = article.get("reddit_filter_metadata", {})
+        reasons = (
+            metadata.get("final_reason_codes", [])
+            if isinstance(metadata, dict)
+            else []
+        )
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ⏭️ 淘汰 [{index}/{len(filtered['dropped'])}] {title} "
+            f"→ {', '.join(reasons) or 'REDDIT_FILTER_DROPPED'}"
+        )
+    return passed_items, len(filtered["dropped"])
+
+
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
     if getattr(bridge, "platform", "") == "x":
@@ -243,6 +330,21 @@ def run_workflow(bridge: CollectorBridge) -> int:
                 print(f"   ❌ GitHub Embedding 筛选失败: {exc}")
                 return EXIT_EMBEDDING
             print(f"   ❌ GitHub 筛选失败: {type(exc).__name__}: {exc}")
+            return EXIT_UNEXPECTED
+    elif getattr(bridge, "platform", "") == "reddit":
+        print(
+            "\n🧠 [3/6] 执行 Reddit 筛选"
+            "（内容规则 → 主题 Embedding → 平台质量评分）..."
+        )
+        try:
+            passed_items, filtered_count = _run_reddit_filters(articles)
+        except Exception as exc:
+            from analyzer.reddit_embedding import RedditEmbeddingError
+
+            if isinstance(exc, RedditEmbeddingError):
+                print(f"   ❌ Reddit Embedding 筛选失败: {exc}")
+                return EXIT_EMBEDDING
+            print(f"   ❌ Reddit 筛选失败: {type(exc).__name__}: {exc}")
             return EXIT_UNEXPECTED
     else:
         print("\n🧠 [3/6] 执行四层筛选（规则 → 语义去重 → 评论区 → 博主画像）...")
@@ -306,7 +408,7 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print("📊 统计：")
     print(f"   - 读取文章: {len(articles)} 篇")
     print(f"   - 通过筛选: {len(passed_items)} 篇")
-    print(f"   - 四层筛选淘汰: {filtered_count} 篇")
+    print(f"   - 平台筛选淘汰: {filtered_count} 篇")
     print(f"   - 生成报告: {generated_count} 篇")
     print(f"   - 推送报告: {len(final_items)} 篇")
     print("=" * 70)
