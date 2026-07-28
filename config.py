@@ -220,7 +220,8 @@ TWSCRAPE_SEEN_ID_LIMIT = 5000
 # ============================================================
 
 # RSS 不提供帖子分数、点赞比例、评论数或 flair。采集器读取明确社区的
-# new/.rss，再在本地按专用关键词、时间窗口和帖子 ID 过滤。
+# new/.rss，在采集阶段只执行时间窗口、格式校验和帖子 ID 去重。
+# 关键词命中只作为审计字段记录，不用于前置淘汰。
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
 REDDIT_RSS_KEYWORDS = [
     "LLM",
@@ -232,14 +233,17 @@ REDDIT_RSS_KEYWORDS = [
     "推理",
     "量化",
 ]
-REDDIT_RSS_RESULTS_PER_SUBREDDIT = 10
+# Reddit RSS 的 limit 参数最高请求 100；服务端实际返回数量可能更少。
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 100
+# 0 表示不在进入专用 pipeline 前设置跨社区总量上限。
+REDDIT_RSS_MAX_CANDIDATES = 0
 REDDIT_RSS_LOOKBACK_HOURS = 168
 REDDIT_RSS_REQUEST_TIMEOUT_SECONDS = 30
 
 # 2026-07-24 的真实响应显示当前出口约 30 秒恢复一次 RSS 请求额度。
 # 多社区之间默认等待 31 秒；建议先只配置一个社区。
 REDDIT_RSS_REQUEST_INTERVAL_SECONDS = 31
-REDDIT_RSS_MAX_RESPONSE_BYTES = 2_000_000
+REDDIT_RSS_MAX_RESPONSE_BYTES = 5_000_000
 REDDIT_RSS_BASE_URL = "https://www.reddit.com"
 REDDIT_RSS_USER_AGENT = os.environ.get(
     "REDDIT_RSS_USER_AGENT",
@@ -317,6 +321,8 @@ REDDIT_QUALITY_WEIGHTS = {
     "source_quality": 0.10,
 }
 REDDIT_QUALITY_MIN_SCORE = 6.0
+# 三层筛选后按 Reddit 质量分降序保留的最终候选数量。
+REDDIT_FINAL_RESULT_LIMIT = 20
 
 # ============================================================
 # 4.4 Twitter 专用结构化处理

@@ -1,7 +1,8 @@
 """Reddit Atom/RSS 采集桥接器。
 
 当前实现只读取配置中明确列出的 subreddit ``new/.rss``，再在本地执行
-关键词、时间窗口和帖子 ID 过滤。不使用 OAuth、PRAW、登录 Cookie 或代理。
+时间窗口、格式校验和帖子 ID 去重。关键词只记录命中情况，不参与前置淘汰。
+不使用 OAuth、PRAW、登录 Cookie 或代理。
 """
 
 from __future__ import annotations
@@ -170,9 +171,9 @@ class RedditRssBridge:
         self.subreddits = [
             _clean_subreddit(subreddit) for subreddit in raw_subreddits
         ]
-        self.limit = getattr(config, "CRAWL_LIMIT", 20)
+        self.limit = getattr(config, "REDDIT_RSS_MAX_CANDIDATES", 0)
         self.per_subreddit_limit = getattr(
-            config, "REDDIT_RSS_RESULTS_PER_SUBREDDIT", 10
+            config, "REDDIT_RSS_RESULTS_PER_SUBREDDIT", 100
         )
         self.lookback_hours = getattr(config, "REDDIT_RSS_LOOKBACK_HOURS", 168)
         self.request_timeout = getattr(
@@ -182,7 +183,7 @@ class RedditRssBridge:
             config, "REDDIT_RSS_REQUEST_INTERVAL_SECONDS", 31
         )
         self.max_response_bytes = getattr(
-            config, "REDDIT_RSS_MAX_RESPONSE_BYTES", 2_000_000
+            config, "REDDIT_RSS_MAX_RESPONSE_BYTES", 5_000_000
         )
         self.user_agent = str(
             getattr(config, "REDDIT_RSS_USER_AGENT", "")
@@ -207,8 +208,8 @@ class RedditRssBridge:
                 f"CRAWL_PLATFORM={config.CRAWL_PLATFORM!r} 不能由 Reddit RSS "
                 "采集器处理；请使用 reddit"
             )
-        if not self.keywords or any(not keyword for keyword in self.keywords):
-            errors.append("SEARCH_KEYWORDS 必须至少包含一个非空关键词")
+        if any(not keyword for keyword in self.keywords):
+            errors.append("REDDIT_RSS_KEYWORDS 不能包含空关键词")
         if not self.subreddits or any(not subreddit for subreddit in self.subreddits):
             errors.append("REDDIT_RSS_SUBREDDITS 必须至少包含一个明确的 subreddit")
         for subreddit in self.subreddits:
@@ -220,13 +221,18 @@ class RedditRssBridge:
                 errors.append(
                     f"REDDIT_RSS_SUBREDDITS 包含无效社区名称：{subreddit!r}"
                 )
-        if not isinstance(self.limit, int) or self.limit <= 0:
-            errors.append("CRAWL_LIMIT 必须是正整数")
+        if (
+            not isinstance(self.limit, int)
+            or isinstance(self.limit, bool)
+            or self.limit < 0
+        ):
+            errors.append("REDDIT_RSS_MAX_CANDIDATES 必须是非负整数")
         if (
             not isinstance(self.per_subreddit_limit, int)
-            or not 1 <= self.per_subreddit_limit <= 25
+            or isinstance(self.per_subreddit_limit, bool)
+            or not 1 <= self.per_subreddit_limit <= 100
         ):
-            errors.append("REDDIT_RSS_RESULTS_PER_SUBREDDIT 必须在 1 到 25 之间")
+            errors.append("REDDIT_RSS_RESULTS_PER_SUBREDDIT 必须在 1 到 100 之间")
         if (
             not isinstance(self.lookback_hours, (int, float))
             or self.lookback_hours <= 0
@@ -282,7 +288,10 @@ class RedditRssBridge:
         self._next_request_delay = float(self.request_interval)
 
         print(f"Reddit RSS 社区：{', '.join(self.subreddits)}")
-        print(f"Reddit 本地关键词：{', '.join(self.keywords)}")
+        print(
+            "Reddit 关键词命中仅记录、不前置淘汰："
+            f"{', '.join(self.keywords) or '未配置'}"
+        )
         print(f"Reddit 本次输出：{output_dir}")
 
         try:
@@ -304,7 +313,7 @@ class RedditRssBridge:
             return CrawlRunResult(
                 success=False,
                 output_dir=output_dir,
-                error="Reddit RSS 请求完成，但本次没有匹配的新内容",
+                error="Reddit RSS 请求完成，但本次没有可处理的新内容",
             )
 
         try:
@@ -400,7 +409,8 @@ class RedditRssBridge:
             print(f"Reddit RSS 跳过：{failure}")
 
         collected.sort(key=lambda item: item[0], reverse=True)
-        return [row for _, row in collected[: self.limit]]
+        rows = [row for _, row in collected]
+        return rows[: self.limit] if self.limit else rows
 
     def _fetch_subreddit(self, subreddit_name: str) -> List[ET.Element]:
         url = (
@@ -517,8 +527,6 @@ class RedditRssBridge:
             for keyword in self.keywords
             if keyword.casefold() in searchable_text
         ]
-        if not matched_keywords:
-            return None
 
         post_url = ""
         for link_node in entry.findall(f"{ATOM}link"):
@@ -567,7 +575,7 @@ class RedditRssBridge:
             "comment_count": None,
             "metrics_available": False,
             "matched_keywords": matched_keywords,
-            "search_keyword": matched_keywords[0],
+            "search_keyword": matched_keywords[0] if matched_keywords else "",
             "search_subreddit": subreddit_scope,
             "collection_method": "reddit_rss",
             "_sort_time": published_at.timestamp(),

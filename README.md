@@ -14,9 +14,9 @@
   极简摘要、分层标签、`data/processed/x.jsonl` 和 `reports/x.html`。
 - GitHub 使用官方 REST API 搜索最近活跃的公开仓库，仅对最终候选读取 README，
   并通过稳定仓库 ID 去重。首版不采集 Issues、Releases 或 Discussions。
-- Reddit 通过指定社区的 `new/.rss` 获取最新帖子，在本地执行关键词、时间窗口和
-  帖子 ID 过滤，随后进入独立的内容规则、主题 Embedding 和质量评分流程。RSS
-  缺失的互动指标不会按零分处罚。
+- Reddit 通过指定社区的 `new/.rss` 尽量获取最新帖子，采集阶段只做时间窗口、
+  格式校验和帖子 ID 去重；关键词只记录命中情况。随后进入独立的内容规则、主题
+  Embedding、质量评分和末端排序限量。RSS 缺失的互动指标不会按零分处罚。
 - 主入口对 Twitter、GitHub 和 Reddit 的专用流程做显式路由，平台之间不会串用筛选器。
 
 ### 适用场景
@@ -245,9 +245,10 @@ GitHub 仓库搜索按 `pushed_at` 时间窗口查询，跨关键词使用 GitHu
 `data/state/github_seen_ids.json`。
 ### 可选：测试 Reddit RSS 采集
 
-Reddit 不经过 MediaCrawler。当前方案读取配置中明确社区的 `new/.rss`，再在本地按
-关键词和最近 168 小时过滤。RSS 不提供帖子分数、点赞比例、评论数或 flair，程序会将
-这些字段明确标记为不可用，不会编造互动数据。
+Reddit 不经过 MediaCrawler。当前方案对配置中明确社区的 `new/.rss` 请求每个社区最多
+100 条，采集阶段只保留最近 168 小时、格式有效且未重复的帖子。关键词命中只写入审计
+字段，不会在进入 Reddit 专用 pipeline 前淘汰内容。RSS 不提供帖子分数、点赞比例、
+评论数或 flair，程序会将这些字段明确标记为不可用，不会编造互动数据。
 
 只测试一个社区的 RSS 请求、Atom 解析和下游加载：
 
@@ -262,6 +263,9 @@ Reddit 不经过 MediaCrawler。当前方案读取配置中明确社区的 `new/
 CRAWL_PLATFORM = "reddit"
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
 REDDIT_RSS_KEYWORDS = ["LLM", "model", "agent", "inference"]
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 100
+REDDIT_RSS_MAX_CANDIDATES = 0
+REDDIT_FINAL_RESULT_LIMIT = 20
 ```
 
 2026-07-24 当前开发机真实测试中，RSS 返回 HTTP 200，但响应额度约 30 秒才恢复一次。
@@ -379,11 +383,13 @@ twscrape
 Reddit：
 指定 subreddit 的 new/.rss
   -> Atom 解析和正文清洗
-  -> Reddit 专用关键词、时间窗口和 ID 过滤
+  -> 时间窗口、格式校验和 ID 去重
+  -> 记录关键词命中（不前置淘汰）
   -> 本次运行 JSONL
   -> 内容与来源规则
   -> 多主题 Embedding 相关性筛选
   -> 相关性、深度、证据、时效和来源质量评分
+  -> 按质量分排序并限制最终候选数
   -> 逐条输出与企业微信推送
 ```
 
@@ -400,8 +406,9 @@ twscrape 同样为每次执行建立独立输出目录，只读取该次搜索�
 
 Reddit RSS 同样只读取本次运行的数据。一个社区暂时失败时会继续其他社区；全部社区
 失败时本次运行返回失败。多社区之间默认至少等待 31 秒，并尊重响应中的限流重置时间。
-筛选阶段只使用 RSS 确实提供的正文、链接、作者、社区和发布时间；当
-`metrics_available=false` 时不会使用分数、点赞比例或评论数。
+每个社区向 RSS 请求最多 100 条，但服务端实际返回数可能更少；默认不在专用 pipeline
+之前设置跨社区总量上限。筛选阶段只使用 RSS 确实提供的正文、链接、作者、社区和
+发布时间；当 `metrics_available=false` 时不会使用分数、点赞比例或评论数。
 
 ## 输出模式
 
@@ -482,8 +489,9 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `TWSCRAPE_RESULTS_PER_QUERY` | 每个 X 关键词最多读取条数 | `50` |
 | `TWSCRAPE_LOOKBACK_HOURS` | X 帖子的本地时间窗口 | `168` |
 | `REDDIT_RSS_SUBREDDITS` | Reddit 明确社区列表 | `["LocalLLaMA"]` |
-| `REDDIT_RSS_KEYWORDS` | Reddit RSS 本地匹配关键词 | `["LLM", "model", "agent"]` |
-| `REDDIT_RSS_RESULTS_PER_SUBREDDIT` | 每个社区最多读取的 feed 条目 | `10` |
+| `REDDIT_RSS_KEYWORDS` | 仅用于记录 Reddit RSS 关键词命中，不前置淘汰 | `["LLM", "model", "agent"]` |
+| `REDDIT_RSS_RESULTS_PER_SUBREDDIT` | 每个社区向 RSS 请求的条目上限 | `100` |
+| `REDDIT_RSS_MAX_CANDIDATES` | 进入专用 pipeline 前的跨社区总量上限；`0` 不限制 | `0` |
 | `REDDIT_RSS_REQUEST_INTERVAL_SECONDS` | 多社区请求间隔 | `31` |
 | `REDDIT_RSS_LOOKBACK_HOURS` | Reddit 本地时间窗口 | `168` |
 | `REDDIT_RULE_FILTER` | Reddit 内容长度和排除词规则 | 字典 |
@@ -494,6 +502,7 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `REDDIT_EMBEDDING_FILTER_MODE` | Reddit 语义筛选模式 | `enforce`、`shadow` |
 | `REDDIT_QUALITY_WEIGHTS` | Reddit 五维质量评分权重 | 字典 |
 | `REDDIT_QUALITY_MIN_SCORE` | Reddit 专用质量筛选最低分 | `6.0` |
+| `REDDIT_FINAL_RESULT_LIMIT` | 质量分排序后的最终候选上限 | `20` |
 | `TWITTER_RULE_FILTER` | 仅供 Twitter 使用的第一层规则 | 字典 |
 | `TWITTER_EMBEDDING_ENABLED` | 是否启用 Twitter Embedding 第二层筛选 | `False` |
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
@@ -588,7 +597,7 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 ### Q10：Reddit RSS 采集失败怎么办？
 
 - 先用 `scripts/smoke_test_reddit_rss.py` 测试一个明确社区；
-- 首次测试只配置一个社区，并确认关键词能命中该社区近期帖子；
+- 首次测试只配置一个社区；关键词只用于展示命中情况，不会影响帖子是否被采集；
 - 遇到 429 时停止手动连试，按错误中的建议时间等待；
 - RSS 不包含分数、点赞比例、评论数或 flair，不能通过调整解析器补出这些字段；
 - 不要通过登录 Cookie、代理池或 IP 轮换规避访问限制。

@@ -5,7 +5,7 @@
 本分支采用 subreddit 的最新帖子 Atom feed：
 
 ```text
-https://www.reddit.com/r/LocalLLaMA/new/.rss?limit=10
+https://www.reddit.com/r/LocalLLaMA/new/.rss?limit=100
 ```
 
 2026-07-24 在当前开发机进行的真实测试结果：
@@ -49,19 +49,22 @@ RSS 不提供：
 明确 subreddit 的 new/.rss
 → Atom XML 校验
 → 正文 HTML 转纯文本
-→ 本地关键词筛选
 → 时间窗口筛选
 → 帖子 ID 去重
+→ 记录本地关键词命中（不淘汰）
 → 统一 JSONL
 → Reddit 内容与来源规则
 → Reddit 多主题 Embedding
 → Reddit 五维质量评分
+→ 按质量分排序并限制最终候选数
 → 现有输出与通知流程
 ```
 
-关键词筛选只在本地进行，不使用 Reddit 搜索 feed。默认只配置
-`LocalLLaMA` 一个社区；配置多个社区时，采集器会在请求之间至少等待 31 秒，并根据
-响应中的 `x-ratelimit-reset` 延长等待。
+关键词匹配只在本地进行并写入审计字段，不作为采集阶段的淘汰条件，也不使用 Reddit
+搜索 feed。默认每个社区请求 `limit=100`，但 RSS 服务端实际返回数量可能更少；
+`REDDIT_RSS_MAX_CANDIDATES = 0` 表示不在专用 pipeline 前设置跨社区总量上限。
+默认只配置 `LocalLLaMA` 一个社区；配置多个社区时，采集器会在请求之间至少等待
+31 秒，并根据响应中的 `x-ratelimit-reset` 延长等待。
 
 ## 专用筛选与评分
 
@@ -72,7 +75,9 @@ Reddit 不再进入小红书/知乎使用的互动质量和博主画像层。专
 2. 主题 Embedding：比较标题、正文、subreddit 和外部来源域名与
    `REDDIT_INTEREST_TOPICS`；
 3. 质量评分：按主题相关性 35%、信息深度 25%、证据可追溯性 20%、时效性 10%、
-   来源完整性 10% 计算 0–10 分。
+   来源完整性 10% 计算 0–10 分；
+4. 末端排序：按质量分降序排列，在全部筛选完成后保留
+   `REDDIT_FINAL_RESULT_LIMIT` 条最终候选。
 
 质量评分始终写入 `interaction_metrics_used: false`。即使将来其他采集器提供互动数据，
 也不会在没有显式设计和校准的情况下改变 RSS 内容得分。
@@ -92,6 +97,9 @@ Reddit 不再进入小红书/知乎使用的互动质量和博主画像层。专
 CRAWL_PLATFORM = "reddit"
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
 REDDIT_RSS_KEYWORDS = ["LLM", "model", "agent", "inference"]
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 100
+REDDIT_RSS_MAX_CANDIDATES = 0
+REDDIT_FINAL_RESULT_LIMIT = 20
 ```
 
 然后运行：

@@ -60,13 +60,16 @@ class MainTest(unittest.TestCase):
             "analyzer.reddit_embedding.validate_reddit_embedding_config",
         ) as validate_embedding, patch(
             "analyzer.reddit_quality.validate_reddit_quality_config",
-        ) as validate_quality:
+        ) as validate_quality, patch(
+            "analyzer.reddit_pipeline.validate_reddit_pipeline_config",
+        ) as validate_pipeline:
             errors = main.validate_runtime_config(bridge)
 
         self.assertEqual(errors, [])
         validate_rules.assert_called_once_with()
         validate_embedding.assert_called_once_with()
         validate_quality.assert_called_once_with()
+        validate_pipeline.assert_called_once_with()
 
     def test_crawler_failure_returns_nonzero_and_stops_pipeline(self):
         bridge = SimpleNamespace(

@@ -16,7 +16,7 @@ from utils.parser import load_articles  # noqa: E402
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Reddit RSS 烟雾测试")
-    parser.add_argument("query", help="一个本地过滤关键词")
+    parser.add_argument("query", help="一个仅用于记录命中情况的审计关键词")
     parser.add_argument(
         "--subreddit",
         default="LocalLLaMA",

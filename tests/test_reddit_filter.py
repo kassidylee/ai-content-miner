@@ -3,9 +3,15 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from analyzer.reddit_common import append_reddit_filter_stage
+from analyzer.reddit_common import (
+    append_reddit_filter_stage,
+    reddit_filter_stage,
+)
 from analyzer.reddit_embedding import build_reddit_embedding_text
-from analyzer.reddit_pipeline import run_reddit_filters
+from analyzer.reddit_pipeline import (
+    run_reddit_filters,
+    validate_reddit_pipeline_config,
+)
 from analyzer.reddit_quality import (
     evaluate_reddit_quality,
     validate_reddit_quality_config,
@@ -127,7 +133,7 @@ class RedditFilterTest(unittest.TestCase):
             kept["reddit_filter_metadata"]["final_reason_codes"],
             ["REDDIT_FILTER_PIPELINE_PASSED"],
         )
-        quality = kept["reddit_filter_metadata"]["stages"][-1]
+        quality = reddit_filter_stage(kept, "quality")
         self.assertGreaterEqual(quality["score"], 6.0)
         self.assertNotIn("engagement", quality["components"])
         self.assertFalse(quality["details"]["interaction_metrics_used"])
@@ -140,6 +146,61 @@ class RedditFilterTest(unittest.TestCase):
             ["REDDIT_RULE_WRONG_PLATFORM"],
         )
         self.assertEqual(len(client.calls), 2)
+
+    def test_pipeline_sorts_by_quality_before_final_result_limit(self):
+        lower = item("lower")
+        higher = item("higher")
+        for candidate, score in ((lower, 6.4), (higher, 8.9)):
+            append_reddit_filter_stage(
+                candidate,
+                {
+                    "stage": "quality",
+                    "decision": "pass",
+                    "score": score,
+                    "reason_codes": ["REDDIT_QUALITY_SCORE_PASSED"],
+                },
+            )
+
+        with patch(
+            "analyzer.reddit_pipeline.apply_reddit_rules",
+            return_value=([lower, higher], []),
+        ), patch(
+            "analyzer.reddit_pipeline.apply_reddit_embedding_filter",
+            return_value=([lower, higher], []),
+        ), patch(
+            "analyzer.reddit_pipeline.apply_reddit_quality_filter",
+            return_value=([lower, higher], []),
+        ), patch(
+            "analyzer.reddit_pipeline.config.REDDIT_FINAL_RESULT_LIMIT",
+            1,
+        ):
+            result = run_reddit_filters([lower, higher])
+
+        self.assertEqual(result["passed"], [higher])
+        self.assertEqual(result["dropped"], [lower])
+        self.assertEqual(
+            reddit_filter_stage(higher, "ranking")["details"]["rank"],
+            1,
+        )
+        self.assertEqual(
+            higher["reddit_filter_metadata"]["final_reason_codes"],
+            ["REDDIT_FILTER_PIPELINE_PASSED"],
+        )
+        self.assertEqual(
+            lower["reddit_filter_metadata"]["final_reason_codes"],
+            ["REDDIT_FINAL_RESULT_LIMIT_EXCEEDED"],
+        )
+
+    def test_final_result_limit_must_be_positive_integer(self):
+        with patch(
+            "analyzer.reddit_pipeline.config.REDDIT_FINAL_RESULT_LIMIT",
+            0,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "REDDIT_FINAL_RESULT_LIMIT 必须是正整数",
+            ):
+                validate_reddit_pipeline_config()
 
     def test_quality_score_ignores_unavailable_interaction_metrics(self):
         no_metrics = item()
@@ -174,6 +235,44 @@ class RedditFilterTest(unittest.TestCase):
         self.assertTrue(second["details"]["metrics_available"])
         self.assertFalse(first["details"]["interaction_metrics_used"])
         self.assertFalse(second["details"]["interaction_metrics_used"])
+
+    def test_quality_score_does_not_use_collection_keyword_match(self):
+        matched = item("matched")
+        unmatched = item("unmatched", matched_keywords=[])
+        for candidate in (matched, unmatched):
+            append_reddit_filter_stage(
+                candidate,
+                {
+                    "stage": "embedding",
+                    "decision": "pass",
+                    "best_topic": "agent",
+                    "best_topic_label": "AI Agent",
+                    "best_score": 0.9,
+                    "reason_codes": [
+                        "REDDIT_EMBEDDING_THRESHOLD_PASSED"
+                    ],
+                },
+            )
+
+        now = datetime(2026, 7, 24, 12, tzinfo=timezone.utc)
+        matched_quality = evaluate_reddit_quality(matched, now=now)
+        unmatched_quality = evaluate_reddit_quality(unmatched, now=now)
+
+        self.assertEqual(
+            matched_quality["score"],
+            unmatched_quality["score"],
+        )
+        self.assertTrue(
+            matched_quality["details"]["source"]["has_collection_match"]
+        )
+        self.assertFalse(
+            unmatched_quality["details"]["source"]["has_collection_match"]
+        )
+        self.assertFalse(
+            matched_quality["details"]["source"][
+                "collection_match_used_in_score"
+            ]
+        )
 
     def test_rules_drop_duplicate_post_id_before_embedding(self):
         first = item()

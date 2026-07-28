@@ -108,6 +108,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             RedditEmbeddingError,
             validate_reddit_embedding_config,
         )
+        from analyzer.reddit_pipeline import validate_reddit_pipeline_config
         from analyzer.reddit_quality import validate_reddit_quality_config
         from analyzer.reddit_rules import validate_reddit_rule_config
 
@@ -115,6 +116,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             validate_reddit_rule_config()
             validate_reddit_embedding_config()
             validate_reddit_quality_config()
+            validate_reddit_pipeline_config()
         except (RedditEmbeddingError, ValueError) as exc:
             errors.append(str(exc))
             
@@ -384,7 +386,7 @@ def run_workflow(bridge: CollectorBridge) -> int:
     elif getattr(bridge, "platform", "") == "reddit":
         print(
             "\n🧠 [3/6] 执行 Reddit 筛选"
-            "（内容规则 → 主题 Embedding → 平台质量评分）..."
+            "（内容规则 → 主题 Embedding → 平台质量评分 → 排序限量）..."
         )
         try:
             passed_items, filtered_count = _run_reddit_filters(articles)

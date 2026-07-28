@@ -216,11 +216,11 @@ def _source_quality_score(item: Dict) -> Tuple[float, Dict[str, object]]:
     score += 0.6 if valid_reddit_url else 0.0
     score += 0.5 if subreddit else 0.0
     score += 0.4 if has_author else 0.0
-    score += 0.3 if has_collection_match else 0.0
     return min(2.0, score), {
         "subreddit": subreddit,
         "has_author": has_author,
         "has_collection_match": has_collection_match,
+        "collection_match_used_in_score": False,
         "valid_reddit_url": valid_reddit_url,
     }
 
