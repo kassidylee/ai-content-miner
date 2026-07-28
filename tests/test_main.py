@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,7 +15,6 @@ class MainTest(unittest.TestCase):
             main.config, "WECOM_WEBHOOK", "https://example.com/hook"
         ):
             errors = main.validate_runtime_config(bridge)
-
         self.assertTrue(any("API_KEY" in error for error in errors))
         self.assertTrue(any("WECOM_WEBHOOK" in error for error in errors))
         self.assertIn("crawler-error", errors)
@@ -74,9 +74,7 @@ class MainTest(unittest.TestCase):
             run=lambda: CrawlRunResult(success=False, error="crawler failed"),
         )
         with patch("main.load_articles") as article_loader:
-            exit_code = main.run_workflow(bridge)
-
-        self.assertEqual(exit_code, main.EXIT_CRAWLER)
+            self.assertEqual(main.run_workflow(bridge), main.EXIT_CRAWLER)
         article_loader.assert_not_called()
 
     def test_empty_current_run_returns_nonzero(self):
@@ -85,9 +83,13 @@ class MainTest(unittest.TestCase):
             run=lambda: CrawlRunResult(success=True, data_files=("current.jsonl",)),
         )
         with patch("main.load_articles", return_value=[]):
-            exit_code = main.run_workflow(bridge)
+            self.assertEqual(main.run_workflow(bridge), main.EXIT_NO_DATA)
 
-        self.assertEqual(exit_code, main.EXIT_NO_DATA)
+    def test_x_routes_to_twitter_workflow(self):
+        bridge = SimpleNamespace(platform="x")
+        with patch("workflows.twitter.run_twitter_workflow", return_value=0) as run:
+            self.assertEqual(main.run_workflow(bridge), 0)
+        run.assert_called_once_with(bridge)
 
     def test_state_failure_after_processing_returns_nonzero(self):
         bridge = SimpleNamespace(
@@ -95,15 +97,22 @@ class MainTest(unittest.TestCase):
             run=lambda: CrawlRunResult(success=True, data_files=("current.jsonl",)),
             acknowledge=lambda: "state failed",
         )
-        with patch("main.load_articles", return_value=[{"title": "test"}]), patch(
-            "main.multi_stage_filter",
-            return_value=FilterResult(),
+        article = {"title": "AI Agent", "publish_time": datetime.now()}
+        stats = {
+            "kept": 1,
+            "dropped_old": 0,
+            "dropped_missing_time": 0,
+            "dropped_unrelated": 0,
+            "truncated": 0,
+        }
+        with patch("main.load_articles", return_value=[article]), patch(
+            "main.recent_keyword_filter", return_value=([article], stats)
+        ), patch(
+            "main.multi_stage_filter", return_value=FilterResult(passed=True)
         ), patch(
             "main.generate_reports", return_value=([], 0)
         ):
-            exit_code = main.run_workflow(bridge)
-
-        self.assertEqual(exit_code, main.EXIT_STATE)
+            self.assertEqual(main.run_workflow(bridge), main.EXIT_STATE)
 
     def test_x_routes_to_twitter_workflow_without_legacy_steps(self):
         bridge = SimpleNamespace(platform="x")
@@ -136,6 +145,15 @@ class MainTest(unittest.TestCase):
                     "main.load_articles",
                     return_value=[{"title": "four-stage item"}],
                 ) as article_loader, patch(
+                    "main.recent_keyword_filter",
+                    return_value=([{"title": "four-stage item"}], {
+                        "kept": 1,
+                        "dropped_old": 0,
+                        "dropped_missing_time": 0,
+                        "dropped_unrelated": 0,
+                        "truncated": 0,
+                    }),
+                ), patch(
                     "main.multi_stage_filter",
                     return_value=FilterResult(),
                 ) as four_stage_filter, patch(
@@ -243,7 +261,9 @@ class MainTest(unittest.TestCase):
             "total_score": 6.0,
         }
 
-        with patch.object(main.config, "SCORE_THRESHOLD", 6.0), patch(
+        with patch.object(main.config, "SCORE_THRESHOLD", 6.0), patch.object(
+            main.config, "API_KEY", "test-key"
+        ), patch(
             "output.generator.generate_output",
             return_value="/tmp/report.txt",
         ) as generate_output, patch(
@@ -262,6 +282,25 @@ class MainTest(unittest.TestCase):
             at_threshold,
             "/tmp/report.txt",
         )
+
+    def test_xhs_uses_recent_filter_before_legacy_scoring(self):
+        bridge = SimpleNamespace(
+            platform="xhs",
+            run=lambda: CrawlRunResult(success=True, data_files=("current.jsonl",)),
+            acknowledge=lambda: "",
+        )
+        article = {"title": "AI Agent", "publish_time": datetime.now()}
+        stats = {"kept": 1, "dropped_old": 0, "dropped_missing_time": 0,
+                 "dropped_unrelated": 0, "truncated": 0}
+        with patch("main.load_articles", return_value=[article]), patch(
+            "main.recent_keyword_filter", return_value=([article], stats)
+        ) as recent_filter, patch(
+            "main.multi_stage_filter", return_value=FilterResult(passed=False)
+        ) as legacy_filter, patch("main.generate_reports", return_value=([], 0)):
+            self.assertEqual(main.run_workflow(bridge), main.EXIT_OK)
+        recent_filter.assert_called_once_with([article])
+        legacy_filter.assert_called_once()
+
 
 
 if __name__ == "__main__":

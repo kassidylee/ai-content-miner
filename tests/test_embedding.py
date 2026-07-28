@@ -1,8 +1,8 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from utils.embedding import EmbeddingError, encode
+from utils.embedding import EmbeddingError, create_client, encode
 
 
 class FakeClient:
@@ -27,6 +27,27 @@ class EmbeddingUtilityTest(unittest.TestCase):
         self.assertEqual(vectors, [[1.0, 0.0], [2.0, 0.0]])
         self.assertEqual(client.calls, [("fake-model", ["first", "second"])])
 
+    def test_dashscope_native_response_is_normalized(self):
+        text_embedding = SimpleNamespace(call=Mock(return_value=SimpleNamespace(
+            status_code=200,
+            output={"embeddings": [
+                {"text_index": 1, "embedding": [2.0, 0.0]},
+                {"text_index": 0, "embedding": [1.0, 0.0]},
+            ]},
+        )))
+        fake_module = SimpleNamespace(TextEmbedding=text_embedding)
+        with patch.dict("sys.modules", {"dashscope": fake_module}), patch(
+            "utils.embedding.config.EMBEDDING_MODEL", "text-embedding-v3"
+        ):
+            client = create_client(api_key="test-key", provider="dashscope")
+            vectors = encode(["first", "second"], client=client, batch_size=2)
+
+        self.assertEqual(vectors, [[1.0, 0.0], [2.0, 0.0]])
+        text_embedding.call.assert_called_once_with(
+            model="text-embedding-v3",
+            input=["first", "second"],
+            api_key="test-key",
+        )
     def test_encode_rejects_empty_text_without_shifting_results(self):
         with self.assertRaises(EmbeddingError):
             encode(["valid", "  "], client=FakeClient([]))

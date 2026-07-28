@@ -72,6 +72,13 @@ class GithubBridgeTest(unittest.TestCase):
         bridge.state_file = root / "state" / "github.json"
         return bridge
 
+    def test_uses_github_keyword_configuration(self):
+        with patch(
+            "crawler.github_bridge.config.GITHUB_SEARCH_KEYWORDS",
+            ["AI Agent", "LLM"],
+        ), patch.dict(os.environ, {"GITHUB_TOKEN": "github_pat_test"}):
+            bridge = GithubBridge(session=FakeSession([]))
+        self.assertEqual(bridge.keywords, ["AI Agent", "LLM"])
     def test_validate_requires_token(self):
         with patch.dict(os.environ, {}, clear=True):
             with patch("crawler.github_bridge.config.GITHUB_TOKEN", ""):

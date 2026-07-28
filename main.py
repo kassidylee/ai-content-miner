@@ -18,7 +18,10 @@ import config
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
 from utils.parser import load_articles
-from analyzer.filter import multi_stage_filter
+from analyzer.filter import (
+    multi_stage_filter,
+    recent_keyword_filter,
+)
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
@@ -74,10 +77,16 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
 
     if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        embedding_provider = str(getattr(config, "EMBEDDING_PROVIDER", "openai")).strip().lower()
+        if embedding_provider not in {"openai", "dashscope"}:
+            errors.append("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
         if not str(getattr(config, "EMBEDDING_API_KEY", "")).strip():
-            errors.append("EMBEDDING_API_KEY 未配置")
-        if not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
+            required = "DASHSCOPE_API_KEY" if embedding_provider == "dashscope" else "EMBEDDING_API_KEY"
+            errors.append(f"{required} 未配置")
+        if embedding_provider == "openai" and not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
             errors.append("EMBEDDING_BASE_URL 必须是有效的 http/https URL")
+        if embedding_provider == "dashscope" and importlib.util.find_spec("dashscope") is None:
+            errors.append("缺少 dashscope；请先运行 python -m pip install -r requirements.txt")
         if not str(getattr(config, "EMBEDDING_MODEL", "")).strip():
             errors.append("EMBEDDING_MODEL 不能为空")
     if getattr(bridge, "platform", "") == "github":
@@ -163,6 +172,30 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
 
     print(f"   ✅ 生成完成，共 {generated_count} 篇报告")
     return final_items, generated_count
+
+def _print_retrieval_stats(articles: Sequence[Dict], passed_items: Sequence[Dict], final_items: Sequence[Dict]) -> None:
+    """Print per-query production yield without changing scoring decisions."""
+    passed_ids = {id(item.get("article", {})) for item in passed_items}
+    report_ids = {id(item.get("article", {})) for item in final_items}
+    stats: Dict[str, Dict[str, int]] = {}
+    for article in articles:
+        for match in article.get("_retrieval_matches", []):
+            key = f"{match['intent_group']} / {match['query']}"
+            bucket = stats.setdefault(key, {"collected": 0, "passed": 0, "reports": 0})
+            bucket["collected"] += 1
+            article_id = id(article)
+            if article_id in passed_ids:
+                bucket["passed"] += 1
+            if article_id in report_ids:
+                bucket["reports"] += 1
+    if not stats:
+        return
+    print("   📈 检索产出统计（按意图组 / 查询）：")
+    for key, bucket in sorted(stats.items(), key=lambda item: (-item[1]["reports"], item[0])):
+        print(
+            f"      {key}: 采集 {bucket['collected']}，"
+            f"评分通过 {bucket['passed']}，研报 {bucket['reports']}"
+        )
 
 def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
     """运行 GitHub 专用筛选，并转换为已有报告生成器输入。"""
@@ -319,6 +352,23 @@ def run_workflow(bridge: CollectorBridge) -> int:
         return EXIT_NO_DATA
     print(f"   ✅ 加载 {len(articles)} 篇文章")
 
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        articles, recent_stats = recent_keyword_filter(articles)
+        print(
+            "   🗓️ 三日关键词筛选："
+            f"保留 {recent_stats['kept']} 篇，"
+            f"时间淘汰 {recent_stats['dropped_old']} 篇，"
+            f"无时间 {recent_stats['dropped_missing_time']} 篇，"
+            f"无关键词 {recent_stats['dropped_unrelated']} 篇"
+        )
+        if recent_stats["truncated"]:
+            print(
+                "   ⚠️ 相关内容超过上限，"
+                f"另截断 {recent_stats['truncated']} 篇"
+            )
+        if not articles:
+            print("   ❌ 最近三天没有命中关键词的内容，流程终止")
+            return EXIT_NO_DATA
     if getattr(bridge, "platform", "") == "github":
         print("\n🧠 [3/6] 执行 GitHub 筛选（仓库规则 → 关键词 Embedding → 质量评分）...")
         try:
@@ -388,6 +438,8 @@ def run_workflow(bridge: CollectorBridge) -> int:
         original_retrieval = False
 
     final_items, generated_count = generate_reports(passed_items)
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        _print_retrieval_stats(articles, passed_items, final_items)
 
     print("\n📤 [6/6] 推送企业微信...")
     if final_items:

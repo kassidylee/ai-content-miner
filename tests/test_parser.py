@@ -172,7 +172,6 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["comments"], 0)
         self.assertIsNone(article["raw"]["score"])
         self.assertFalse(article["raw"]["metrics_available"])
-
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

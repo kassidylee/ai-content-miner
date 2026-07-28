@@ -171,3 +171,47 @@ def sanitize_filename(title: str) -> str:
     safe = re.sub(r'[^\w\s\u4e00-\u9fff]', '', title)
     safe = safe.strip()[:40].replace(' ', '_')
     return safe or "未命名"
+
+def upload_report_links(local_path: str):
+    """Upload once to private COS and return preview/download presigned URLs."""
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+    except ImportError as exc:
+        raise RuntimeError("缺少 qcloud-cos，请运行 pip install -r requirements.txt") from exc
+
+    secret_id = config.COS_SECRET_ID
+    secret_key = config.COS_SECRET_KEY
+    bucket = config.COS_BUCKET
+    if not (secret_id and secret_key and bucket):
+        raise RuntimeError("COS 配置缺失：需设置 COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET")
+    prefix = config.COS_PREFIX
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    path = os.path.abspath(local_path)
+    filename = os.path.basename(path)
+    key = prefix + filename
+    content_type = "text/html; charset=utf-8" if filename.lower().endswith(".html") else "text/plain; charset=utf-8"
+    client = CosS3Client(CosConfig(
+        Region=config.COS_REGION,
+        SecretId=secret_id,
+        SecretKey=secret_key,
+    ))
+    with open(path, "rb") as file_obj:
+        client.put_object(Bucket=bucket, Key=key, Body=file_obj, ContentType=content_type)
+    expires = config.COS_PRESIGNED_EXPIRES
+    preview = client.get_presigned_url(
+        Method="GET", Bucket=bucket, Key=key, Expired=expires,
+        Params={
+            "response-content-disposition": "inline",
+            "response-content-type": content_type,
+        },
+    )
+    download = client.get_presigned_url(
+        Method="GET", Bucket=bucket, Key=key, Expired=expires,
+        Params={
+            "response-content-disposition": f'attachment; filename="{filename}"',
+            # 必须覆盖 Content-Type，否则 HTML 仍可能被浏览器内联渲染。
+            "response-content-type": "application/octet-stream",
+        },
+    )
+    return preview, download

@@ -52,9 +52,14 @@ class GithubBridge:
         self.api_base_url = str(
             getattr(config, "GITHUB_API_BASE_URL", "https://api.github.com")
         ).rstrip("/")
+        configured_keywords = getattr(
+            config,
+            "GITHUB_SEARCH_KEYWORDS",
+            getattr(config, "CONTENT_SEARCH_KEYWORDS", config.SEARCH_KEYWORDS),
+        )
         self.keywords = [
             str(keyword).strip()
-            for keyword in getattr(config, "SEARCH_KEYWORDS", [])
+            for keyword in configured_keywords
             if str(keyword).strip()
         ]
         self.limit = int(getattr(config, "CRAWL_LIMIT", 20))
