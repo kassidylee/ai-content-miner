@@ -16,16 +16,18 @@ Twitter 工作流。
 6. 是否具备最低互动质量；
 7. 是否与本次其他内容重复。
 
-通过本地规则后，Embedding 层目前直接跳过，最后再根据回复区是否存在多来源的
-强烈质疑进行筛选。
+通过本地规则和可选 Embedding 后，系统先对全部合格候选做事件聚类和排序，再按
+排名惰性检查回复区，直到选出最多 8 条主推和 4 条补充。
 
 ```text
 X Top 搜索
   → 数据标准化
   → 第一层：本地规则、技术评分和互动门槛
-  → 第二层：Embedding（当前关闭）
-  → 第三层：回复区可信度检查
-  → LLM 标题、摘要和标签（不参与筛选）
+  → 第二层：Embedding（默认关闭）
+  → 同事件聚类、内容排序和多样性约束
+  → 按排名惰性检查回复区并补位
+  → 最多 8 条主推和 4 条补充
+  → 仅为入选内容生成 LLM 标题、摘要和标签
   → data/processed/x.jsonl
   → reports/x.html
 ```
@@ -65,16 +67,16 @@ SEARCH_KEYWORDS = [
 
 ```python
 TWSCRAPE_RESULTS_PER_QUERY = 50
-CRAWL_LIMIT = 100
 TWSCRAPE_LOOKBACK_HOURS = 168
 ```
 
 - 每个查询最多读取 50 条；
-- 所有查询合并、去重后，本次最多进入下游 100 条；
+- 所有查询结果都会在合并和去重后进入 Twitter 筛选；
 - 只接受最近 168 小时内的帖子；
 - 已经确认处理过的帖子 ID 会由 twscrape 状态文件排除。
 
-这里的 100 是候选上限，不是最终必须保留的数量。最终数量完全由筛选结果决定。
+Twitter 不读取通用的 `CRAWL_LIMIT`。候选不会因为发布时间排在全局第 100 条之后
+而被截断，发布数量由后面的每日 8+4 选择器控制。
 
 ## 3. 第一层：本地确定性规则
 
@@ -237,17 +239,23 @@ paperswithcode.com
 这类帖子即使出现“LLM、API、训练”等词，也通常无法通过。如果同时提供强技术
 细节和一手证据，仍有可能通过，避免把真正的技术分析一刀切删除。
 
-### 4.6 营销内容扣分
+### 4.6 广告硬过滤与软推广扣分
 
-以下内容会扣 2 分：
+课程、订阅和获客内容不允许进入每日精选。以下高置信度广告词在技术评分前直接淘汰：
 
-- course、webinar、conference、event、hackathon；
-- newsletter、subscribe、top 10、recommended、follow；
-- 课程、直播、论坛、大会、峰会；
-- 推荐、关注、清单、合集、招聘、offer。
+- course、webinar、bootcamp、masterclass、newsletter、subscribe；
+- gumroad、enroll；
+- 课程、开源课、公开课、训练营、报名、订阅；
+- 亲授、付费社群、知识星球、免费领取。
 
-营销扣分不是硬删除。如果帖子同时提供真实 GitHub/arXiv 证据和足够的技术细节，
-仍可能达到及格线。
+对应原因码：
+
+```text
+TWITTER_RULE_PROMOTION_NOT_ALLOWED
+```
+
+conference、event、follow、推荐、清单和合集等词也可能出现在正常技术分享中，因此
+仍作为软推广信号扣分，而不是单独触发硬删除。
 
 ### 4.7 评分示例
 
@@ -297,29 +305,38 @@ https://github.com/example/project
 
 ## 5. 互动质量检查
 
-通过技术评分后，还必须满足至少一个互动条件：
-
-```python
-"min_view_count": 50
-"min_social_engagement": 2
-```
-
-也就是：
+浏览量只说明帖子获得过曝光，不代表读者认可，因此不能再单独帮助内容通过。系统使用：
 
 ```text
-浏览量 >= 50
-或者
-点赞 + 回复 + 转发 + 引用 + 收藏 >= 2
+加权互动 =
+    点赞
+  + 1.5 × 回复
+  + 3 × 转发
+  + 2.5 × 引用
+  + 2 × 收藏
 ```
 
-两项都不满足时使用：
+规则层默认要求加权互动至少达到 2。带 GitHub、arXiv、Hugging Face 或
+Papers with Code 链接的内容可以暂时通过这个低成本门槛，让新项目进入后续排序；
+最终发布仍要求加权互动至少达到 5。
+
+未达到规则层门槛时使用：
 
 ```text
 TWITTER_RULE_LOW_ENGAGEMENT
 ```
 
-使用“二选一”而不是同时满足，是为了保留小众但有真实互动的技术内容，也允许浏览量
-较高但互动暂时较少的内容。
+每日排序进一步比较绝对互动、互动速度和互动率：
+
+```text
+互动质量 =
+    50% × 绝对互动分位数
+  + 30% × 互动速度分位数
+  + 20% × 互动率分位数
+```
+
+其中互动速度按帖子年龄衰减，互动率使用加权互动除以浏览量。这样互动已经很高的内容
+获得最高优先级，新发布但传播很快的内容也不会只因累计时间短而吃亏。
 
 ## 6. 重复内容检查
 
@@ -337,13 +354,13 @@ TWITTER_RULE_DUPLICATE_EXTERNAL_URL
 
 ## 7. 第二层：Embedding
 
-当前 Embedding 层已关闭：
+Embedding 默认关闭，也可以通过环境变量启用：
 
 ```python
 TWITTER_EMBEDDING_ENABLED = False
 ```
 
-原因是当前 API 没有可用的 Embedding 模型或渠道。关闭后：
+关闭后：
 
 - 不创建 Embedding 客户端；
 - 不发送 Embedding API 请求；
@@ -357,7 +374,7 @@ TWITTER_EMBEDDING_DISABLED
 
 `shadow` 和 `enforce` 配置只有重新启用 Embedding 后才生效。
 
-## 8. 第三层：回复区检查
+## 8. 回复区检查
 
 回复区检查的目标不是判断主题相关性，而是发现多来源、较高置信度的强烈质疑。
 
@@ -370,6 +387,9 @@ TWITTER_EMBEDDING_DISABLED
 "critical_ratio_threshold": 0.4
 "weighted_ratio_threshold": 0.6
 ```
+
+回复检查在每日候选完成聚类和排序后惰性执行。系统从最高排名开始检查，遇到被强烈
+质疑的内容就继续检查下一条补位，直到选满 8+4 或候选耗尽。
 
 处理原则：
 
@@ -389,9 +409,42 @@ TWITTER_REPLIES_PASSED
 TWITTER_REPLIES_STRONG_CHALLENGE
 ```
 
-## 9. LLM 摘要不参与筛选
+## 9. 每日 8+4 选择
 
-三层筛选完成后，`analyzer/twitter_enricher.py` 才会调用 Chat API 生成：
+每日选择器位于 `analyzer/twitter_daily_selector.py`，负责：
+
+- 合并相同外部链接或标题、实体高度相似的同事件内容；
+- 按互动质量 60%、新颖度 15%、一手证据 10%、技术信息 10% 和新鲜度 5% 排序；
+- 48 小时以内的内容正常竞争；
+- 48 至 168 小时的内容只有互动质量至少达到 0.85 且带一手证据时继续竞争；
+- 加权互动低于 5 的内容不用于填充发布名额；
+- 最近 7 天已发布的同事件默认不再推送；
+- 同一作者每天最多 1 条；
+- 同一主题没有硬配额，每多选择一条只在重排时扣 3 分；
+- 前 8 条标记为 `primary`，后 4 条标记为 `more`；
+- 其余合格内容标记为 `archive` 或 `cluster_duplicate`。
+
+8+4 是发布上限，不是填充目标。候选不足时不会降低质量标准凑满 12 条。
+
+互动质量是最终顺序的主导因素。主题只做轻量软重排，因此不会再出现四个主题乘以
+每类两条、导致补充区永远为空的问题。
+
+常见每日选择原因码：
+
+```text
+TWITTER_DAILY_TOO_OLD
+TWITTER_DAILY_LOW_SOCIAL_SIGNAL
+TWITTER_DAILY_STALE_LOW_SIGNAL
+TWITTER_DAILY_RECENT_EVENT
+TWITTER_DAILY_CLUSTER_DUPLICATE
+TWITTER_DAILY_AUTHOR_LIMIT
+TWITTER_DAILY_NOT_SELECTED
+TWITTER_DAILY_SELECTED
+```
+
+## 10. LLM 摘要不参与筛选
+
+每日选择完成后，`analyzer/twitter_enricher.py` 只为入选内容调用 Chat API：
 
 - 极简标题；
 - 一到两句话摘要；
@@ -410,7 +463,7 @@ LLM 结果不会改变 `keep/drop` 决定。API 调用失败时会回退为原�
 
 因此，页面使用原文回退摘要不代表筛选失败，只表示摘要服务不可用。
 
-## 10. 审计数据
+## 11. 审计数据
 
 每条候选内容都会写入：
 
@@ -418,7 +471,8 @@ LLM 结果不会改变 `keep/drop` 决定。API 调用失败时会回退为原�
 data/processed/x.jsonl
 ```
 
-保留和淘汰内容都会保存，便于查看具体原因。核心结构：
+发布、归档和淘汰内容都会保存，便于查看具体原因。除 `filter_metadata` 外，每条
+预筛通过内容还会写入 `publication_metadata`：
 
 ```json
 {
@@ -436,7 +490,7 @@ data/processed/x.jsonl
           "business_penalties": [],
           "promotion_penalties": [],
           "view_count": 1000,
-          "social_engagement": 20
+          "weighted_engagement": 32.5
         }
       },
       {
@@ -452,17 +506,34 @@ data/processed/x.jsonl
       }
     ],
     "final_decision": "keep"
+  },
+  "publication_metadata": {
+    "digest_date": "2026-07-29",
+    "decision": "primary",
+    "score": 83.5,
+    "rank": 1,
+    "base_rank": 1,
+    "selection_score": 83.5,
+    "score_breakdown": {
+      "social_quality": 0.93,
+      "novelty": 1.0,
+      "evidence": 1.0,
+      "technical": 1.0,
+      "freshness": 0.91,
+      "promotion_penalty": 0.0
+    },
+    "topic": "ai-agent"
   }
 }
 ```
 
-HTML 只展示最终保留的内容：
+HTML 只展示当天最多 8 条主推和 4 条补充：
 
 ```text
 reports/x.html
 ```
 
-## 11. 常见第一层原因码
+## 12. 常见第一层原因码
 
 | 原因码 | 含义 |
 | --- | --- |
@@ -476,30 +547,32 @@ reports/x.html
 | `TWITTER_RULE_RETWEET_NOT_ALLOWED` | 转推不允许 |
 | `TWITTER_RULE_LANGUAGE_NOT_ALLOWED` | 语言不是中文或英文 |
 | `TWITTER_RULE_EXCLUDED_KEYWORD` | 命中硬排除词 |
+| `TWITTER_RULE_PROMOTION_NOT_ALLOWED` | 命中课程、订阅或获客广告 |
 | `TWITTER_RULE_TOPIC_NOT_RELEVANT` | 没有命中 AI 主题 |
 | `TWITTER_RULE_CONTENT_TOO_SHORT` | 有效正文过短 |
 | `TWITTER_RULE_TECHNICAL_SIGNAL_MISSING` | 有 AI 主题但没有技术信号或证据 |
 | `TWITTER_RULE_TECHNICAL_SCORE_TOO_LOW` | 技术得分低于 3 |
-| `TWITTER_RULE_LOW_ENGAGEMENT` | 浏览和互动均未达标 |
+| `TWITTER_RULE_LOW_ENGAGEMENT` | 加权互动未达标且没有一手证据 |
 | `TWITTER_RULE_DUPLICATE_CONTENT` | 正文重复 |
 | `TWITTER_RULE_DUPLICATE_EXTERNAL_URL` | 外部链接重复 |
 | `TWITTER_RULES_PASSED` | 第一层全部通过 |
 
-## 12. 如何调节严格程度
+## 13. 如何调节严格程度
 
 ### 想让筛选更严格
 
 - 提高 `min_technical_score`；
-- 提高 `min_view_count` 或 `min_social_engagement`；
+- 提高 `min_weighted_engagement` 或 `TWITTER_DAILY_MIN_WEIGHTED_ENGAGEMENT`；
+- 提高 `TWITTER_DAILY_FALLBACK_MIN_SOCIAL_SCORE`；
 - 缩小 `required_topic_keywords`；
-- 把不需要的业务领域加入商业或营销扣分词；
+- 把不允许的推广形式加入 `promotion_hard_drop_keywords`；
 - 将某些绝对不接受的内容加入 `exclude_keywords`；
 - 只保留带 GitHub/arXiv 等证据的内容。
 
 ### 想让筛选更宽松
 
 - 降低 `min_technical_score`；
-- 降低互动门槛；
+- 降低规则层或发布层的加权互动门槛；
 - 扩充技术词和深度技术词；
 - 减少商业和营销扣分词；
 - 增加搜索查询覆盖范围。
@@ -507,7 +580,7 @@ reports/x.html
 修改规则后应先使用已有 JSONL 做离线复筛，再进行新一轮联网抓取，避免频繁调整导致
 结果难以比较。
 
-## 13. 当前限制
+## 14. 当前限制
 
 1. 关键词规则无法完全理解上下文，仍可能出现误判；
 2. GitHub/arXiv 链接只能证明有一手入口，不能证明内容本身正确；
@@ -516,12 +589,13 @@ reports/x.html
 5. 回复数量不足时采用保守放行，不能作为强质量证明；
 6. Embedding 当前关闭，无法做语义相似度判断；
 7. Chat API 当前不稳定，摘要可能回退为原文；
-8. 当前不设置中英文比例，也不设置固定保留数量。
+8. 当前不设置中英文比例；
+9. 事件聚类使用确定性文本和链接特征，仍可能漏合并或误合并。
 
 如果后续 API 提供稳定的 Embedding 或 Chat 分类能力，可以在现有确定性规则之后增加
 语义复核，但不应替代当前可解释、可审计的本地筛选。
 
-## 14. 相关文件
+## 15. 相关文件
 
 | 文件 | 作用 |
 | --- | --- |
@@ -529,8 +603,10 @@ reports/x.html
 | `crawler/twscrape_bridge.py` | X 搜索、数量限制和原始数据采集 |
 | `utils/twitter_parser.py` | Twitter 数据标准化 |
 | `analyzer/twitter_rules.py` | 第一层确定性规则和技术评分 |
+| `analyzer/twitter_engagement.py` | 规则层和排序层共用的加权互动计算 |
 | `analyzer/twitter_embedding.py` | 第二层 Embedding 实现，当前未启用 |
 | `analyzer/twitter_comments.py` | 第三层回复区筛选 |
+| `analyzer/twitter_daily_selector.py` | 每日聚类、排序、回复补位和 8+4 选择 |
 | `analyzer/twitter_pipeline.py` | 三层顺序编排 |
 | `analyzer/twitter_enricher.py` | 筛选后的标题、摘要和标签 |
 | `utils/twitter_result_store.py` | JSONL 审计记录 |

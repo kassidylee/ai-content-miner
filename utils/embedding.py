@@ -93,7 +93,8 @@ def create_client(
         max_retries=int(config.EMBEDDING_MAX_RETRIES),
     )
 
-def _validate_config(require_credentials: bool = True) -> None:
+def validate_config(require_credentials: bool = True) -> None:
+    """Validate shared Embedding settings before making a request."""
     provider = str(getattr(config, "EMBEDDING_PROVIDER", "openai")).strip().lower()
     if provider not in {"openai", "dashscope"}:
         raise EmbeddingError("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
@@ -129,7 +130,7 @@ def encode(
     batch_size: Optional[int] = None,
 ) -> List[List[float]]:
     """Batch-encode texts and preserve the exact input order."""
-    _validate_config(require_credentials=client is None)
+    validate_config(require_credentials=client is None)
     values = _normalize_texts(texts)
     if not values:
         return []

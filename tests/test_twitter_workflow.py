@@ -28,13 +28,26 @@ def make_bridge(acknowledge=None):
     return SimpleNamespace(
         platform="x",
         validate=lambda: [],
-        run=lambda: CrawlRunResult(
-            success=True,
-            data_files=(Path("current.jsonl"),),
+        run=MagicMock(
+            return_value=CrawlRunResult(
+                success=True,
+                data_files=(Path("current.jsonl"),),
+            )
         ),
         acknowledge=acknowledge or MagicMock(return_value=""),
         fetch_replies=MagicMock(),
     )
+
+
+def make_selection(item):
+    return {
+        "digest_date": "2026-07-29",
+        "primary": [item],
+        "more": [],
+        "selected": [item],
+        "archived": [],
+        "comment_dropped": [],
+    }
 
 
 class TwitterWorkflowTest(unittest.TestCase):
@@ -51,6 +64,25 @@ class TwitterWorkflowTest(unittest.TestCase):
             twitter.validate_twitter_runtime_config(bridge)
 
         validate_embedding.assert_not_called()
+
+    def test_disabled_embedding_skips_service_preflight(self):
+        bridge = make_bridge()
+        with patch.object(
+            twitter.config,
+            "TWITTER_EMBEDDING_ENABLED",
+            False,
+        ), patch(
+            "workflows.twitter.probe_twitter_embedding_service",
+            side_effect=TwitterEmbeddingError("must not be called"),
+        ) as probe, patch(
+            "workflows.twitter.load_twitter_items",
+            return_value=[],
+        ):
+            exit_code = twitter.run_twitter_workflow(bridge)
+
+        self.assertEqual(exit_code, twitter.EXIT_NO_DATA)
+        probe.assert_not_called()
+        bridge.run.assert_called_once_with()
 
     def test_twitter_wecom_is_optional_even_if_legacy_webhook_is_placeholder(self):
         bridge = make_bridge()
@@ -80,8 +112,14 @@ class TwitterWorkflowTest(unittest.TestCase):
             "workflows.twitter.load_twitter_items",
             return_value=[item],
         ), patch(
-            "workflows.twitter.run_twitter_filters",
+            "workflows.twitter.run_twitter_preselection_filters",
             return_value=filtered,
+        ), patch(
+            "workflows.twitter.load_recent_twitter_digest_items",
+            return_value=[],
+        ), patch(
+            "workflows.twitter.select_twitter_daily_items",
+            return_value=make_selection(item),
         ), patch(
             "workflows.twitter.enrich_twitter_items",
             return_value=[item],
@@ -95,12 +133,19 @@ class TwitterWorkflowTest(unittest.TestCase):
             twitter.config,
             "TWITTER_ENABLE_WECOM",
             False,
+        ), patch(
+            "workflows.twitter.probe_twitter_embedding_service",
+            return_value=1024,
         ):
             exit_code = twitter.run_twitter_workflow(bridge)
 
         self.assertEqual(exit_code, twitter.EXIT_OK)
         store.assert_called_once_with([item])
-        render.assert_called_once_with()
+        render.assert_called_once_with(
+            primary_items=[item],
+            more_items=[],
+            digest_date="2026-07-29",
+        )
         acknowledge.assert_called_once_with()
         self.assertEqual(
             item["filter_metadata"]["final_decision"],
@@ -108,14 +153,10 @@ class TwitterWorkflowTest(unittest.TestCase):
         )
 
     def test_embedding_failure_does_not_store_render_or_acknowledge(self):
-        item = make_item()
         acknowledge = MagicMock(return_value="")
         bridge = make_bridge(acknowledge)
         with patch(
-            "workflows.twitter.load_twitter_items",
-            return_value=[item],
-        ), patch(
-            "workflows.twitter.run_twitter_filters",
+            "workflows.twitter.probe_twitter_embedding_service",
             side_effect=TwitterEmbeddingError("failed"),
         ), patch(
             "workflows.twitter.append_twitter_results"
@@ -128,6 +169,7 @@ class TwitterWorkflowTest(unittest.TestCase):
         store.assert_not_called()
         render.assert_not_called()
         acknowledge.assert_not_called()
+        bridge.run.assert_not_called()
 
     def test_notification_failure_happens_after_acknowledge(self):
         item = make_item()
@@ -141,16 +183,23 @@ class TwitterWorkflowTest(unittest.TestCase):
             "dropped": [],
         }
 
-        def notify(_items):
+        def notify(_items, more_count):
             events.append("notify")
+            self.assertEqual(more_count, 0)
             return False
 
         with patch(
             "workflows.twitter.load_twitter_items",
             return_value=[item],
         ), patch(
-            "workflows.twitter.run_twitter_filters",
+            "workflows.twitter.run_twitter_preselection_filters",
             return_value=filtered,
+        ), patch(
+            "workflows.twitter.load_recent_twitter_digest_items",
+            return_value=[],
+        ), patch(
+            "workflows.twitter.select_twitter_daily_items",
+            return_value=make_selection(item),
         ), patch(
             "workflows.twitter.enrich_twitter_items",
             return_value=[item],
@@ -164,6 +213,9 @@ class TwitterWorkflowTest(unittest.TestCase):
             twitter.config,
             "TWITTER_ENABLE_WECOM",
             True,
+        ), patch(
+            "workflows.twitter.probe_twitter_embedding_service",
+            return_value=1024,
         ), patch(
             "workflows.twitter.send_twitter_wecom",
             side_effect=notify,

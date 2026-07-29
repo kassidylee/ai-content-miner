@@ -8,6 +8,11 @@ from urllib.parse import urlparse
 
 import config
 from analyzer.twitter_common import append_twitter_filter_stage
+from analyzer.twitter_engagement import (
+    twitter_metric,
+    validate_twitter_engagement_config,
+    weighted_twitter_engagement,
+)
 
 
 URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
@@ -69,20 +74,6 @@ def _contains_topic_keyword(searchable: str, keyword: str) -> bool:
     ) is not None
 
 
-def _metric(item: Dict, name: str) -> int:
-    """把缺失或异常互动指标归零，防止脏数据绕过质量门槛。"""
-    metrics = item.get("metrics", {})
-    if not isinstance(metrics, dict):
-        return 0
-    value = metrics.get(name, 0)
-    if isinstance(value, bool):
-        return 0
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _matched_keywords(searchable: str, keywords: Iterable[str]) -> List[str]:
     return [
         str(keyword)
@@ -137,22 +128,28 @@ def validate_twitter_rule_config() -> None:
         raise ValueError(
             "TWITTER_RULE_FILTER.min_meaningful_chars 必须是正整数"
         )
-    for name in (
-        "min_view_count",
-        "min_social_engagement",
-        "min_technical_score",
-    ):
+    for name in ("min_technical_score",):
         value = rules.get(name)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(
                 f"TWITTER_RULE_FILTER.{name} 必须是非负整数"
             )
+    minimum_engagement = rules.get("min_weighted_engagement")
+    if (
+        not isinstance(minimum_engagement, (int, float))
+        or isinstance(minimum_engagement, bool)
+        or minimum_engagement < 0
+    ):
+        raise ValueError(
+            "TWITTER_RULE_FILTER.min_weighted_engagement 必须是非负数"
+        )
     for name in (
         "allowed_languages",
         "required_topic_keywords",
         "technical_keywords",
         "technical_depth_keywords",
         "business_penalty_keywords",
+        "promotion_hard_drop_keywords",
         "promotion_penalty_keywords",
         "evidence_domains",
         "exclude_keywords",
@@ -175,6 +172,7 @@ def validate_twitter_rule_config() -> None:
         raise ValueError(
             "TWITTER_RULE_FILTER.technical_depth_keywords 不能为空"
         )
+    validate_twitter_engagement_config()
 
 
 def evaluate_twitter_rules(
@@ -230,6 +228,19 @@ def evaluate_twitter_rules(
                 "TWITTER_RULE_EXCLUDED_KEYWORD",
                 {"keyword": str(keyword)},
             )
+
+    # 课程、订阅和获客内容属于产品明确禁止的类型，因此在相关度和
+    # 技术分计算前直接淘汰。这里使用独立词表，避免后续加权分数抵消广告判定。
+    hard_promotion_hits = _matched_keywords(
+        searchable,
+        rules.get("promotion_hard_drop_keywords", []),
+    )
+    if hard_promotion_hits:
+        return _result(
+            "drop",
+            "TWITTER_RULE_PROMOTION_NOT_ALLOWED",
+            {"promotion_keywords": hard_promotion_hits},
+        )
 
     # 搜索结果只代表 X 返回了该帖子；这里必须再次验证实际正文主题。
     matched_topics = _matched_keywords(
@@ -311,34 +322,24 @@ def evaluate_twitter_rules(
             technical_details,
         )
 
-    # 浏览量和社交互动满足任一门槛即可，兼顾高曝光内容和小众技术讨论。
-    view_count = _metric(item, "view_count")
-    social_engagement = sum(
-        _metric(item, name)
-        for name in (
-            "like_count",
-            "reply_count",
-            "share_count",
-            "quote_count",
-            "bookmark_count",
-        )
-    )
-    min_view_count = int(rules.get("min_view_count", 0) or 0)
-    min_social_engagement = int(
-        rules.get("min_social_engagement", 0) or 0
+    # 浏览量只表示帖子被展示过，不表示读者认可。规则层因此只使用
+    # 加权赞评转作为最低质量门槛；带一手技术链接的帖子允许在冷启动阶段继续排序。
+    view_count = twitter_metric(item, "view_count")
+    weighted_engagement = weighted_twitter_engagement(item)
+    min_weighted_engagement = float(
+        rules.get("min_weighted_engagement", 0) or 0
     )
     if (
-        view_count < min_view_count
-        and social_engagement < min_social_engagement
+        weighted_engagement < min_weighted_engagement
+        and not evidence_domains
     ):
         return _result(
             "drop",
             "TWITTER_RULE_LOW_ENGAGEMENT",
             {
                 "view_count": view_count,
-                "social_engagement": social_engagement,
-                "min_view_count": min_view_count,
-                "min_social_engagement": min_social_engagement,
+                "weighted_engagement": weighted_engagement,
+                "min_weighted_engagement": min_weighted_engagement,
             },
         )
 
@@ -362,7 +363,7 @@ def evaluate_twitter_rules(
             "meaningful_chars": len(meaningful),
             "matched_topic_keywords": matched_topics,
             "view_count": view_count,
-            "social_engagement": social_engagement,
+            "weighted_engagement": weighted_engagement,
             **technical_details,
         },
     )
