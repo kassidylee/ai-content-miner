@@ -88,12 +88,22 @@ $env:AI_MODEL_NAME = "your-chat-model"
 $env:WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
 ```
 
-通用 Embedding 配置（小红书、知乎，以及未单独覆盖的 GitHub/Reddit）使用以下环境变量：
+通用 Embedding 配置（Twitter、小红书、知乎，以及未单独覆盖的 GitHub/Reddit）可以
+直接使用 DashScope 原生 SDK，不需要填写 OpenAI-compatible Base URL：
 
 ```powershell
+$env:EMBEDDING_PROVIDER = "dashscope"
+$env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
+$env:EMBEDDING_MODEL = "text-embedding-v4"
+```
+
+如果使用其他 OpenAI-compatible Embedding 服务，则改为：
+
+```powershell
+$env:EMBEDDING_PROVIDER = "openai"
 $env:EMBEDDING_API_KEY = "your-embedding-api-key"
-$env:EMBEDDING_BASE_URL = "https://api.openai.com/v1"
-$env:EMBEDDING_MODEL = "text-embedding-3-small"
+$env:EMBEDDING_BASE_URL = "https://your-provider.example/v1"
+$env:EMBEDDING_MODEL = "your-embedding-model"
 ```
 
 GitHub Embedding 可以使用另一家实际支持 `/embeddings` 的服务：
@@ -219,10 +229,24 @@ X 不经过 MediaCrawler。本分支使用 `twscrape==0.19.2` 的异步 `API.sea
 .venv/bin/python scripts/smoke_test_twscrape.py "AI Agent" --limit 3
 ```
 
-烟雾测试成功后，才将 `config.py` 中的平台改为：
+采集测试通过后，在 `.env` 中启用 Twitter 路由和 Embedding 强制筛选：
 
-```python
-CRAWL_PLATFORM = "x"
+```dotenv
+CRAWL_PLATFORM=x
+TWITTER_EMBEDDING_ENABLED=true
+TWITTER_EMBEDDING_FILTER_MODE=enforce
+```
+
+先单独验证 Embedding 服务；该检查只发送一条内置测试文本，不会开始爬取：
+
+```bash
+.venv/bin/python scripts/smoke_test_twitter_embedding.py
+```
+
+只有会话和 Embedding 两个烟雾测试均成功后，才运行完整 Twitter 工作流：
+
+```bash
+.venv/bin/python main.py
 ```
 
 ### 可选：测试 GitHub 仓库搜索
@@ -237,10 +261,14 @@ python scripts/smoke_test_github_embedding.py
 ```
 
 烟雾测试只调用 GitHub REST API 并写入本次运行 JSONL，不调用 LLM、不生成报告、
-不发送企业微信，也不写入已处理状态。成功后在 `config.py` 中设置：
+不发送企业微信，也不写入已处理状态。成功后在 `.env` 中设置平台，并在
+`config.py` 中调整非敏感搜索参数：
+
+```dotenv
+CRAWL_PLATFORM=github
+```
 
 ```python
-CRAWL_PLATFORM = "github"
 SEARCH_KEYWORDS = ["AI Agent", "LLM"]
 GITHUB_LOOKBACK_DAYS = 7
 GITHUB_MIN_STARS = 10
@@ -311,8 +339,10 @@ ai-content-miner/
 │   ├── reddit_quality.py       # Reddit 无互动依赖的质量评分
 │   ├── reddit_pipeline.py      # Reddit 三层筛选编排
 │   ├── twitter_rules.py        # Twitter 第一层规则
+│   ├── twitter_engagement.py   # Twitter 加权互动指标
 │   ├── twitter_embedding.py    # Twitter 多主题语义筛选
 │   ├── twitter_comments.py     # Twitter 回复区筛选
+│   ├── twitter_daily_selector.py # Twitter 每日 8+4 选择
 │   ├── twitter_enricher.py     # Twitter 摘要和标签
 │   └── twitter_pipeline.py     # Twitter 三层筛选编排
 │
@@ -327,6 +357,7 @@ ai-content-miner/
 ├── scripts/
 │   ├── setup_twscrape_session.py # 创建本地 Cookie 会话
 │   ├── smoke_test_github.py      # 只读 GitHub 仓库搜索烟雾测试
+│   ├── smoke_test_twitter_embedding.py # Twitter Embedding 连通性测试
 │   ├── smoke_test_twscrape.py    # 只读 X 搜索烟雾测试
 │   └── smoke_test_reddit_rss.py  # 只读 Reddit RSS 烟雾测试
 │
@@ -477,6 +508,10 @@ Reddit 同样不生成逐条研报。所有候选帖子及筛选审计追加写�
 | `LLM_API_KEY` | `.env` 中的 LLM API Key | `your-api-key-here` |
 | `LLM_BASE_URL` | `.env` 中的 OpenAI 兼容 API 地址 | `https://api.openai.com/v1` |
 | `LLM_MODEL_NAME` | `.env` 中由 API 服务商提供的实际模型 ID | `your-model-name` |
+| `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL_NAME` | 负责人分支使用的兼容别名；`LLM_*` 已设置时优先使用 `LLM_*` | 同上 |
+| `CRAWL_PLATFORM` | `.env` 中选择运行平台 | `x` |
+| `EMBEDDING_API_KEY` | `.env` 中独立的 Embedding API Key | `your-embedding-api-key-here` |
+| `EMBEDDING_BASE_URL` | `.env` 中的 Embedding API 地址 | `https://api.openai.com/v1` |
 | `EMBEDDING_MODEL` | 非 Twitter 路线使用的实际 Embedding 模型 ID | `text-embedding-3-small` |
 | `TWITTER_EMBEDDING_MODEL` | 启用 Twitter Embedding 后使用的模型 ID | `text-embedding-3-small` |
 | `WECOM_WEBHOOK` | `.env` 中的企业微信 Webhook | `https://qyapi.weixin.qq.com/...` |
@@ -534,6 +569,15 @@ Reddit 同样不生成逐条研报。所有候选帖子及筛选审计追加写�
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
 | `TWITTER_EMBEDDING_FILTER_MODE` | Twitter 语义筛选模式 | `shadow`、`enforce` |
 | `TWITTER_COMMENT_FILTER` | Twitter 回复区筛选阈值 | 字典 |
+| `TWITTER_DAILY_PRIMARY_LIMIT` | 每日主推上限 | `8` |
+| `TWITTER_DAILY_MORE_LIMIT` | 每日折叠补充上限 | `4` |
+| `TWITTER_DAILY_AUTHOR_LIMIT` | 同一作者每日上限 | `1` |
+| `TWITTER_DAILY_TOPIC_REPEAT_PENALTY` | 已选同主题每条重排扣分 | `3.0` |
+| `TWITTER_DAILY_STANDARD_MAX_AGE_HOURS` | 正常参与日刊排序的最长年龄 | `48` |
+| `TWITTER_DAILY_FALLBACK_MAX_AGE_HOURS` | 高互动且有证据内容的最长年龄 | `168` |
+| `TWITTER_DAILY_FALLBACK_MIN_SOCIAL_SCORE` | 较旧内容所需最低互动质量 | `0.85` |
+| `TWITTER_DAILY_MIN_WEIGHTED_ENGAGEMENT` | 最终发布所需最低加权互动 | `5.0` |
+| `TWITTER_DAILY_HISTORY_DAYS` | 同事件重复推送抑制天数 | `7` |
 | `TWITTER_TAG_TAXONOMY` | Twitter 受控分层标签 | 列表 |
 | `TWITTER_ENABLE_WECOM` | 是否发送 Twitter 摘要通知 | `False` |
 

@@ -54,11 +54,15 @@ def _tags(value: object) -> str:
         if not isinstance(tag, dict):
             continue
         level = tag.get("level")
+        if level == 1:
+            continue
         css_level = level if level in {1, 2, 3} else 0
         rendered.append(
             f'<span class="tag level-{css_level}">'
             f'{_text(tag.get("label"))}</span>'
         )
+        if len(rendered) >= 2:
+            break
     return "".join(rendered)
 
 
@@ -81,10 +85,11 @@ def _references(value: object) -> str:
             f'<a href="{url}" target="_blank" '
             f'rel="noopener noreferrer">{label}</a>'
         )
+    if not links:
+        return ""
     return (
-        f'<div class="references">{"".join(links)}</div>'
-        if links
-        else ""
+        '<details class="source-details"><summary>相关链接</summary>'
+        f'<div class="references">{"".join(links)}</div></details>'
     )
 
 
@@ -93,11 +98,22 @@ def _card(item: Dict) -> str:
     if not isinstance(metrics, dict):
         metrics = {}
     source_url = _url(item.get("source_url"))
-    primary = (
-        f'<a class="primary" href="{source_url}" target="_blank" '
-        'rel="noopener noreferrer">查看原帖</a>'
+    title = _text(item.get("title") or "无标题")
+    linked_title = (
+        f'<a href="{source_url}" target="_blank" '
+        f'rel="noopener noreferrer">{title}</a>'
         if source_url
-        else '<span class="primary disabled">原帖链接不可用</span>'
+        else title
+    )
+    publication = item.get("publication_metadata", {})
+    related_count = 0
+    if isinstance(publication, dict):
+        related = publication.get("related_source_ids", [])
+        related_count = len(related) if isinstance(related, list) else 0
+    related_text = (
+        f"<span>相关来源 {related_count}</span>"
+        if related_count
+        else ""
     )
     return f"""
 <article class="card">
@@ -105,27 +121,39 @@ def _card(item: Dict) -> str:
     <span>{_text(item.get("author") or item.get("username") or "未知作者")}</span>
     <time>{_text(_time(item.get("published_at")))}</time>
   </div>
-  <h2>{_text(item.get("title") or "无标题")}</h2>
-  <p>{_text(item.get("abstract") or "暂无摘要")}</p>
+  <h2>{linked_title}</h2>
+  <p class="abstract">{_text(item.get("abstract") or "暂无摘要")}</p>
   <div class="tags">{_tags(item.get("tags"))}</div>
   <div class="metrics">
     <span>点赞 {_metric(metrics, "like_count")}</span>
     <span>回复 {_metric(metrics, "reply_count")}</span>
     <span>转发 {_metric(metrics, "share_count")}</span>
     <span>浏览 {_metric(metrics, "view_count")}</span>
+    {related_text}
   </div>
   {_references(item.get("referenced_urls"))}
-  <div class="actions">{primary}</div>
 </article>"""
 
 
-def _document(items: List[Dict]) -> str:
-    cards = "\n".join(_card(item) for item in items)
-    if not cards:
-        cards = (
+def _document(
+    primary_items: List[Dict],
+    more_items: List[Dict],
+    digest_date: str,
+) -> str:
+    primary_cards = "\n".join(_card(item) for item in primary_items)
+    if not primary_cards:
+        primary_cards = (
             '<section class="empty"><h2>暂无符合条件的内容</h2>'
             "<p>页面会在后续采集到保留内容时自动更新。</p></section>"
         )
+    more_cards = "\n".join(_card(item) for item in more_items)
+    more_section = ""
+    if more_cards:
+        more_section = f"""
+    <details class="more-section">
+      <summary>更多值得关注（{len(more_items)}）</summary>
+      <section class="feed more-feed">{more_cards}</section>
+    </details>"""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -138,54 +166,105 @@ def _document(items: List[Dict]) -> str:
     * {{ box-sizing:border-box; }}
     body {{ margin:0; background:var(--bg); color:var(--text);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",
-      sans-serif; line-height:1.6; }}
-    main {{ width:min(920px,calc(100% - 32px)); margin:48px auto 72px; }}
-    h1 {{ margin-bottom:6px; }}
+      sans-serif; line-height:1.5; }}
+    main {{ width:min(760px,calc(100% - 24px)); margin:32px auto 56px; }}
+    h1 {{ margin:0 0 4px; font-size:28px; }}
     .subtitle,.meta,.metrics {{ color:var(--muted); }}
-    .feed {{ display:grid; gap:18px; margin-top:28px; }}
+    .feed {{ display:grid; gap:10px; margin-top:20px; }}
     .card,.empty {{ background:var(--surface); border:1px solid var(--line);
-      border-radius:14px; padding:24px; }}
+      border-radius:12px; padding:16px; }}
     .meta {{ display:flex; justify-content:space-between; gap:16px;
-      font-size:14px; }}
-    h2 {{ margin:12px 0 8px; line-height:1.35; }}
-    .tags,.metrics,.references {{ display:flex; flex-wrap:wrap; gap:8px;
-      margin-top:12px; }}
-    .tag {{ border-radius:999px; padding:3px 10px; background:#f0f2f5;
       font-size:13px; }}
-    .level-1 {{ font-weight:600; }}
+    h2 {{ margin:7px 0 5px; font-size:18px; line-height:1.35; }}
+    h2 a {{ color:var(--text); text-decoration:none; }}
+    h2 a:hover {{ color:var(--accent); }}
+    .abstract {{ margin:0; color:#344054; display:-webkit-box;
+      -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
+    .tags,.metrics,.references {{ display:flex; flex-wrap:wrap; gap:8px;
+      margin-top:9px; }}
+    .tag {{ border-radius:999px; padding:2px 8px; background:#f0f2f5;
+      font-size:12px; }}
     .level-2 {{ background:#edf3ff; color:#194da8; }}
     .level-3 {{ background:#fff; border:1px solid #c8d7f2; }}
-    .metrics {{ gap:18px; font-size:14px; }}
-    .actions {{ margin-top:20px; }}
-    .primary {{ display:inline-block; border-radius:8px; padding:9px 15px;
-      background:var(--accent); color:#fff; text-decoration:none;
-      font-weight:600; }}
-    .disabled {{ background:#8b95a1; }}
+    .metrics {{ gap:12px; font-size:12px; }}
+    .source-details {{ margin-top:8px; color:var(--muted); font-size:13px; }}
+    .source-details summary,.more-section>summary {{ cursor:pointer; }}
+    .references a {{ color:var(--accent); }}
+    .more-section {{ margin-top:20px; }}
+    .more-section>summary {{ padding:12px 16px; background:var(--surface);
+      border:1px solid var(--line); border-radius:10px; font-weight:600; }}
+    .more-feed {{ margin-top:10px; }}
+    @media (max-width:560px) {{
+      main {{ width:min(100% - 16px,760px); margin-top:20px; }}
+      .card,.empty {{ padding:13px; }}
+      h1 {{ font-size:24px; }}
+      h2 {{ font-size:17px; }}
+    }}
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>X / Twitter 信息流</h1>
-      <div class="subtitle">结构化摘要直接链接原始内容</div>
+      <h1>Twitter 每日精选</h1>
+      <div class="subtitle">{_text(digest_date)} · 主推 {len(primary_items)} 条</div>
     </header>
-    <section class="feed">{cards}</section>
+    <section class="feed">{primary_cards}</section>
+    {more_section}
   </main>
 </body>
 </html>
 """
 
 
-def render_twitter_feed(items: Optional[List[Dict]] = None) -> Path:
-    """从 Twitter 事实源生成固定 x.html 并原子替换。"""
-    feed_items = items if items is not None else load_twitter_feed_items()
+def render_twitter_feed(
+    items: Optional[List[Dict]] = None,
+    *,
+    primary_items: Optional[List[Dict]] = None,
+    more_items: Optional[List[Dict]] = None,
+    digest_date: Optional[str] = None,
+) -> Path:
+    """生成最多 8 条主推和 4 条补充的每日页面。"""
+    explicit_groups = primary_items is not None or more_items is not None
+    if explicit_groups and items is not None:
+        raise TwitterFeedRenderError("不能同时传入 items 和分组内容")
+    if explicit_groups:
+        primary = list(primary_items or [])
+        more = list(more_items or [])
+    else:
+        feed_items = items if items is not None else load_twitter_feed_items()
+        primary_limit = int(config.TWITTER_DAILY_PRIMARY_LIMIT)
+        more_limit = int(config.TWITTER_DAILY_MORE_LIMIT)
+        primary = list(feed_items[:primary_limit])
+        more = list(
+            feed_items[primary_limit : primary_limit + more_limit]
+        )
+    if len(primary) > int(config.TWITTER_DAILY_PRIMARY_LIMIT):
+        raise TwitterFeedRenderError("Twitter 主推内容超过每日上限")
+    if len(more) > int(config.TWITTER_DAILY_MORE_LIMIT):
+        raise TwitterFeedRenderError("Twitter 补充内容超过每日上限")
+    primary_ids = {
+        str(item.get("id", "") or "")
+        for item in primary
+        if str(item.get("id", "") or "")
+    }
+    more_ids = {
+        str(item.get("id", "") or "")
+        for item in more
+        if str(item.get("id", "") or "")
+    }
+    if primary_ids.intersection(more_ids):
+        raise TwitterFeedRenderError("Twitter 主推和补充内容存在重复")
+    report_date = digest_date or datetime.now().date().isoformat()
     destination = Path(config.TWITTER_REPORT_FILE)
     temporary = destination.with_name(
         f".{destination.name}.{uuid4().hex}.tmp"
     )
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(_document(feed_items), encoding="utf-8")
+        temporary.write_text(
+            _document(primary, more, report_date),
+            encoding="utf-8",
+        )
         temporary.replace(destination)
     except OSError as exc:
         try:

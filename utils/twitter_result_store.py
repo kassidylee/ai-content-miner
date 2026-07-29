@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import config
 
@@ -89,13 +90,10 @@ def _datetime(value: object) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
-def load_twitter_feed_items(
-    now: Optional[datetime] = None,
-) -> List[Dict]:
-    """读取最新保留记录，按推文 ID 去重和发布时间倒序。"""
+def _load_latest_twitter_items() -> Dict[str, Dict]:
     source = Path(config.TWITTER_PROCESSED_FILE)
     if not source.exists():
-        return []
+        return {}
     latest: Dict[str, Dict] = {}
     try:
         with source.open("r", encoding="utf-8") as input_file:
@@ -117,6 +115,50 @@ def load_twitter_feed_items(
         raise TwitterResultStoreError(
             f"Twitter 结构化结果读取失败：{exc}"
         ) from exc
+    return latest
+
+
+def load_recent_twitter_digest_items(
+    now: Optional[datetime] = None,
+    days: Optional[int] = None,
+) -> List[Dict]:
+    """读取近期已发布内容，供每日事件去重。"""
+    latest = _load_latest_twitter_items()
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    history_days = (
+        int(days)
+        if days is not None
+        else int(config.TWITTER_DAILY_HISTORY_DAYS)
+    )
+    cutoff = current.astimezone(timezone.utc) - timedelta(days=history_days)
+    digest_date = current.astimezone(
+        ZoneInfo(config.TWITTER_DAILY_TIMEZONE)
+    ).date().isoformat()
+    selected: List[Dict] = []
+    for item in latest.values():
+        publication = item.get("publication_metadata", {})
+        selected_at = _datetime(
+            item.get("processed_at") or item.get("published_at")
+        )
+        if (
+            not isinstance(publication, dict)
+            or publication.get("decision") not in {"primary", "more"}
+            or publication.get("digest_date") == digest_date
+            or selected_at is None
+            or selected_at < cutoff
+        ):
+            continue
+        selected.append(item)
+    return selected
+
+
+def load_twitter_feed_items(
+    now: Optional[datetime] = None,
+) -> List[Dict]:
+    """读取最新保留记录，按推文 ID 去重和发布时间倒序。"""
+    latest = _load_latest_twitter_items()
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
