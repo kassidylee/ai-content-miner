@@ -57,7 +57,10 @@ RSS 不提供：
 → Reddit 多主题 Embedding
 → Reddit 五维质量评分
 → 按质量分排序并限制最终候选数
-→ 现有输出与通知流程
+→ 极简标题和摘要
+→ data/processed/reddit.jsonl
+→ reports/reddit.html
+→ 可选企业微信短摘要与 Reddit 原帖直链
 ```
 
 关键词匹配只在本地进行并写入审计字段，不作为采集阶段的淘汰条件，也不使用 Reddit
@@ -82,6 +85,21 @@ Reddit 不再进入小红书/知乎使用的互动质量和博主画像层。专
 质量评分始终写入 `interaction_metrics_used: false`。即使将来其他采集器提供互动数据，
 也不会在没有显式设计和校准的情况下改变 RSS 内容得分。
 
+## 专用输出与通知
+
+Reddit 不进入通用的逐条文本卡片、长 HTML 研报、COS 上传或
+`REPORT_BASE_URL` 通知链路：
+
+- 全部候选及其筛选审计追加保存到 `data/processed/reddit.jsonl`；
+- 通过筛选的最新帖子聚合展示在固定页面 `reports/reddit.html`；
+- 每条内容只保留极简标题、短摘要、质量分、社区、主题和原帖链接；
+- 企业微信通知默认最多包含 5 条完整帖子，不会把某条内容从中间截断；
+- 整条消息按 UTF-8 控制在 4096 字节以内，主链接直接跳转 Reddit 原帖；
+- 摘要模型失败时使用本地确定性降级，不会再生成“研报失败”的 HTML。
+
+如不需要企业微信通知，可设置 `REDDIT_ENABLE_WECOM=False`。结构化 JSONL、聚合页面和
+采集状态确认仍会正常执行。
+
 ## 运行
 
 先进行只读烟雾测试：
@@ -100,6 +118,7 @@ REDDIT_RSS_KEYWORDS = ["LLM", "model", "agent", "inference"]
 REDDIT_RSS_RESULTS_PER_SUBREDDIT = 100
 REDDIT_RSS_MAX_CANDIDATES = 0
 REDDIT_FINAL_RESULT_LIMIT = 20
+REDDIT_ENABLE_WECOM = True
 ```
 
 然后运行：

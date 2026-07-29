@@ -326,6 +326,27 @@ REDDIT_QUALITY_MIN_SCORE = 6.0
 # 三层筛选后按 Reddit 质量分降序保留的最终候选数量。
 REDDIT_FINAL_RESULT_LIMIT = 20
 
+# Reddit 专用社交信息流输出。通过筛选的帖子只生成极简标题/摘要，
+# 不进入逐条长研报生成器；全部筛选审计写入结构化 JSONL。
+REDDIT_TITLE_MAX_CHARS = 80
+REDDIT_ABSTRACT_MAX_CHARS = 180
+REDDIT_ENRICHMENT_INPUT_MAX_CHARS = 3000
+REDDIT_ENRICHMENT_TEMPERATURE = 0.1
+REDDIT_ENRICHMENT_MAX_TOKENS = 300
+REDDIT_ENRICHMENT_TIMEOUT_SECONDS = 30
+REDDIT_ENRICHMENT_MAX_RETRIES = 1
+REDDIT_PROCESSED_FILE = os.path.join(
+    DATA_DIR, "processed", "reddit.jsonl"
+)
+REDDIT_REPORT_FILE = os.path.join(PROJECT_ROOT, "reports", "reddit.html")
+REDDIT_FEED_RETENTION_DAYS = 30
+REDDIT_FEED_MAX_ITEMS = 200
+REDDIT_WECOM_MAX_ITEMS = 5
+REDDIT_WECOM_MAX_BYTES = 4096
+REDDIT_ENABLE_WECOM = os.environ.get(
+    "REDDIT_ENABLE_WECOM", "true"
+).strip().casefold() in {"1", "true", "yes", "on"}
+
 # ============================================================
 # 4.4 Twitter 专用结构化处理
 # ============================================================

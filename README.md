@@ -16,7 +16,8 @@
   并通过稳定仓库 ID 去重。首版不采集 Issues、Releases 或 Discussions。
 - Reddit 通过指定社区的 `new/.rss` 尽量获取最新帖子，采集阶段只做时间窗口、
   格式校验和帖子 ID 去重；关键词只记录命中情况。随后进入独立的内容规则、主题
-  Embedding、质量评分和末端排序限量。RSS 缺失的互动指标不会按零分处罚。
+  Embedding、质量评分和末端排序限量，再生成极简摘要、结构化 JSONL、聚合页面和
+  Reddit 原帖直链通知。RSS 缺失的互动指标不会按零分处罚。
 - 主入口对 Twitter、GitHub 和 Reddit 的专用流程做显式路由，平台之间不会串用筛选器。
 
 ### 适用场景
@@ -33,8 +34,9 @@
 | 平台筛选 | 小红书/知乎使用四层筛选；GitHub、Reddit 和 Twitter 使用各自隔离的专用流程。 |
 | 综合评分 | 各平台输出可审计的 0–10 综合分；Reddit 不使用 RSS 不提供的互动指标。 |
 | Twitter 信息流 | 使用独立三层筛选、极简摘要、结构化 JSONL 和聚合页面。 |
-| 多模式输出 | 短内容生成文本卡片（`.txt`）；中长内容生成完整 HTML 研报（`.html`）。 |
-| 企业微信推送 | 使用 Markdown V2 格式推送消息，并附带在线阅读链接。 |
+| Reddit 信息流 | 使用独立筛选、极简摘要、结构化 JSONL、聚合页面和 Reddit 原帖直链。 |
+| 多模式输出 | 小红书、知乎等非社交信息流内容按长度生成文本卡片或完整 HTML 研报。 |
+| 企业微信推送 | 使用 Markdown V2；Twitter 和 Reddit 推送短摘要与原帖直链。 |
 | RadIter 日志 | 记录每次决策过程，为后续持续优化提供依据。 |
 
 ## 快速开始
@@ -44,8 +46,8 @@
 - Python 3.9 或更高版本；使用 X/twscrape 时需要 Python 3.10 或更高版本
 - [uv](https://docs.astral.sh/uv/)（用于安装并运行 MediaCrawler）
 - OpenAI API Key，或兼容接口的 API Key
-- 小红书、知乎、GitHub 和 Reddit 完整流程需要企业微信机器人 Webhook；Twitter
-  通知默认关闭
+- 小红书、知乎和 GitHub 完整流程需要企业微信机器人 Webhook；Reddit 通知默认开启但
+  可通过 `REDDIT_ENABLE_WECOM=False` 关闭；Twitter 通知默认关闭
 - GitHub 流程需要从环境变量读取的 `GITHUB_TOKEN`
 
 ### 1. 克隆项目
@@ -121,7 +123,7 @@ LLM_API_KEY=your-api-key-here
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL_NAME=your-model-name
 
-# 非 Twitter 流程必填；Twitter 仅在 TWITTER_ENABLE_WECOM=True 时必填。
+# 非社交信息流流程必填；Reddit/Twitter 仅在各自通知开关开启时必填。
 WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxx
 ```
 
@@ -138,10 +140,14 @@ REPORT_BASE_URL = "http://127.0.0.1:8000/reports"
 
 # Twitter 通知默认关闭
 TWITTER_ENABLE_WECOM = False
+
+# Reddit 通知默认开启；关闭后仍会生成结构化结果和聚合页面
+REDDIT_ENABLE_WECOM = True
 ```
 
-报告预览地址和非敏感开关继续在 `config.py` 中配置。Twitter 仅在
-`TWITTER_ENABLE_WECOM=True` 时使用企业微信 Webhook。
+报告预览地址和非敏感开关继续在 `config.py` 中配置。Twitter 和 Reddit 仅在各自
+通知开关开启时使用企业微信 Webhook；Reddit 通知直接链接原帖，不依赖
+`REPORT_BASE_URL` 或 COS。
 
 其他配置项请参阅 `config.py` 中的注释。
 
@@ -301,6 +307,7 @@ ai-content-miner/
 │   ├── filter.py               # 小红书/知乎四层筛选
 │   ├── reddit_rules.py         # Reddit 内容与来源规则
 │   ├── reddit_embedding.py     # Reddit 多主题语义筛选
+│   ├── reddit_enricher.py      # Reddit 极简标题和摘要
 │   ├── reddit_quality.py       # Reddit 无互动依赖的质量评分
 │   ├── reddit_pipeline.py      # Reddit 三层筛选编排
 │   ├── twitter_rules.py        # Twitter 第一层规则
@@ -326,18 +333,22 @@ ai-content-miner/
 ├── output/                     # 输出模块
 │   ├── __init__.py
 │   ├── generator.py            # 文本卡片和 HTML 研报生成
+│   ├── reddit_feed.py          # Reddit 聚合信息流页面
 │   └── twitter_feed.py         # Twitter 聚合页面
 │
 ├── workflows/
+│   ├── reddit.py               # Reddit 独立工作流
 │   └── twitter.py              # Twitter 独立工作流
 │
 ├── notifier/                   # 推送模块
 │   ├── __init__.py
+│   ├── reddit_wecom.py         # Reddit 短摘要与原帖直链通知
 │   └── wecom.py                # 企业微信推送与配置校验
 │
 ├── utils/                      # 工具模块
 │   ├── __init__.py
 │   ├── parser.py               # 文章解析，唯一权威实现
+│   ├── reddit_result_store.py  # Reddit JSONL 事实源
 │   └── raditer.py              # RadIter 决策日志
 │
 ├── data/                       # 爬取数据，运行时自动创建
@@ -390,7 +401,10 @@ Reddit：
   -> 多主题 Embedding 相关性筛选
   -> 相关性、深度、证据、时效和来源质量评分
   -> 按质量分排序并限制最终候选数
-  -> 逐条输出与企业微信推送
+  -> 极简标题和摘要
+  -> data/processed/reddit.jsonl
+  -> reports/reddit.html
+  -> 可选企业微信短摘要与 Reddit 原帖直链
 ```
 
 每次 MediaCrawler 调用都通过 CLI 传入平台、关键词、数量限制、JSONL 格式和
@@ -412,7 +426,7 @@ Reddit RSS 同样只读取本次运行的数据。一个社区暂时失败时会
 
 ## 输出模式
 
-小红书、知乎和 Reddit 按内容字数选择输出格式：
+小红书和知乎按内容字数选择输出格式：
 
 | 内容字数 | 输出格式 | 说明 |
 | --- | --- | --- |
@@ -424,6 +438,11 @@ Reddit RSS 同样只读取本次运行的数据。一个社区暂时失败时会
 Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 `data/processed/x.jsonl`，最终保留项聚合展示在 `reports/x.html`，主链接直接跳转
 原始推文。
+
+Reddit 同样不生成逐条研报。所有候选帖子及筛选审计追加写入
+`data/processed/reddit.jsonl`，最终保留项聚合展示在 `reports/reddit.html`。企业微信
+按完整帖子边界控制在 4096 字节以内，默认最多推送 5 条，链接直接跳转 Reddit 原帖；
+不需要 COS 或 `REPORT_BASE_URL`。
 
 ### 短内容卡片示例
 
@@ -503,6 +522,13 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 | `REDDIT_QUALITY_WEIGHTS` | Reddit 五维质量评分权重 | 字典 |
 | `REDDIT_QUALITY_MIN_SCORE` | Reddit 专用质量筛选最低分 | `6.0` |
 | `REDDIT_FINAL_RESULT_LIMIT` | 质量分排序后的最终候选上限 | `20` |
+| `REDDIT_PROCESSED_FILE` | Reddit 候选与筛选审计 JSONL | `data/processed/reddit.jsonl` |
+| `REDDIT_REPORT_FILE` | Reddit 聚合信息流页面 | `reports/reddit.html` |
+| `REDDIT_FEED_RETENTION_DAYS` | 聚合页保留最近多少天 | `30` |
+| `REDDIT_FEED_MAX_ITEMS` | 聚合页最多展示条数 | `200` |
+| `REDDIT_ENABLE_WECOM` | 是否发送 Reddit 原帖直链通知 | `True` |
+| `REDDIT_WECOM_MAX_ITEMS` | Reddit 每次通知最多完整帖子数 | `5` |
+| `REDDIT_WECOM_MAX_BYTES` | Reddit 通知字节上限 | `4096` |
 | `TWITTER_RULE_FILTER` | 仅供 Twitter 使用的第一层规则 | 字典 |
 | `TWITTER_EMBEDDING_ENABLED` | 是否启用 Twitter Embedding 第二层筛选 | `False` |
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
@@ -513,8 +539,8 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 ## 当前接入边界
 
-- 主入口按平台分流。只有 X 调用 `workflows/twitter.py`；其他平台不会调用 Twitter
-  专用规则、Embedding、回复区筛选或聚合页面。
+- 主入口按平台分流。X 调用 `workflows/twitter.py`，Reddit 调用
+  `workflows/reddit.py`；其他平台不会调用两者的专用筛选、信息流或通知模块。
   - GitHub 首版只发现公开仓库；Releases 是下一种建议接入的数据类型，Issues 和
   Discussions 保持独立。
 - 小红书、知乎使用四层筛选。当前主入口没有加载历史对比样本，
@@ -535,6 +561,8 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 - twscrape 使用非公开 X GraphQL 接口，可能因 X 改版、Cookie 失效、限流或账号验证而
   中断；任何失败都会返回非零状态，不会显示为采集成功。
 - X 使用独立三层筛选和结构化聚合页，不调用非 Twitter 四层筛选或逐条报告生成器。
+- Reddit 使用独立筛选、极简摘要、结构化聚合页和原帖直链通知，不调用通用逐条报告、
+  COS 上传或 `REPORT_BASE_URL` 链路。
 
 ## 常见问题
 
@@ -546,6 +574,9 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 ### Q2：企业微信中的报告链接无法打开怎么办？
 
+- Reddit 和 Twitter 通知直接链接原帖，不使用本地报告地址；先确认运行环境和员工设备
+  可以访问对应原帖。
+- 以下检查只适用于包含“在线阅读”报告链接的小红书、知乎、GitHub 等流程：
 - 检查 `REPORT_BASE_URL` 是否配置为企业员工可访问的地址。
 - 确认 `python3 server.py` 正在运行。
 - 使用内网地址时，确认员工设备与服务器位于同一网络。
@@ -559,10 +590,12 @@ Twitter 不生成逐条研报。所有候选推文及筛选审计追加写入
 
 ### Q4：为什么短内容会生成卡片而不是研报？
 
-系统会根据内容字数自动判断输出模式：
+小红书、知乎等通用报告流程会根据内容字数自动判断输出模式：
 
 - 少于 500 字：生成纯文本卡片，不进行深度分析。
 - 不少于 500 字：生成完整 HTML 研报，包括雷达图和深度解析。
+
+Twitter 和 Reddit 使用社交信息流输出，不按字数生成逐条研报。
 
 ### Q5：四层评分为什么仍使用 0–10？
 
