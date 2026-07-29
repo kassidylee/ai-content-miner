@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from xml.sax.saxutils import escape
 
 from crawler.reddit_rss_bridge import RedditRssBridge
@@ -89,12 +90,21 @@ class RedditRssBridgeTest(unittest.TestCase):
         bridge.target_data_dir = root / "data"
         bridge.keywords = ["AI", "LLM"]
         bridge.subreddits = ["MachineLearning", "LocalLLaMA"]
-        bridge.limit = 3
-        bridge.per_subreddit_limit = 10
+        bridge.limit = 0
+        bridge.per_subreddit_limit = 100
         bridge.lookback_hours = 168
         bridge.request_interval = 31
         bridge.max_response_bytes = 1_000_000
         return bridge
+
+    def test_uses_dedicated_reddit_keywords_and_accepts_single_string(self):
+        with patch(
+            "crawler.reddit_rss_bridge.config.REDDIT_RSS_KEYWORDS",
+            "model",
+        ):
+            bridge = RedditRssBridge()
+
+        self.assertEqual(bridge.keywords, ["model"])
 
     def test_validate_requires_explicit_subreddit_and_user_agent(self):
         bridge = RedditRssBridge()
@@ -110,7 +120,22 @@ class RedditRssBridgeTest(unittest.TestCase):
         self.assertFalse(any("CLIENT_ID" in error for error in errors))
         self.assertFalse(any("PRAW" in error for error in errors))
 
-    def test_run_parses_atom_filters_deduplicates_and_preserves_limitations(self):
+    def test_validate_accepts_feed_limit_100_and_rejects_larger_value(self):
+        requester = FakeRequester({})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, requester)
+            bridge.subreddits = ["LocalLLaMA"]
+            bridge.per_subreddit_limit = 100
+            self.assertEqual(bridge.validate(), [])
+
+            bridge.per_subreddit_limit = 101
+            errors = bridge.validate()
+
+        self.assertTrue(
+            any("必须在 1 到 100 之间" in error for error in errors)
+        )
+
+    def test_run_keeps_unmatched_posts_deduplicates_and_preserves_limitations(self):
         duplicate = atom_entry(
             "2",
             "LLM older duplicate",
@@ -167,7 +192,10 @@ class RedditRssBridgeTest(unittest.TestCase):
                     encoding="utf-8"
                 ).splitlines()
             ]
-            self.assertEqual([row["id"] for row in rows], ["1", "3", "2"])
+            self.assertEqual(
+                [row["id"] for row in rows],
+                ["1", "ignored", "3", "2"],
+            )
             self.assertEqual(rows[0]["content"], "正文与 AI")
             self.assertEqual(rows[0]["external_url"], "https://example.com/paper")
             self.assertEqual(rows[0]["author"], "alice")
@@ -176,20 +204,60 @@ class RedditRssBridgeTest(unittest.TestCase):
             self.assertIsNone(rows[0]["comment_count"])
             self.assertFalse(rows[0]["metrics_available"])
             self.assertEqual(rows[0]["collection_method"], "reddit_rss")
-            self.assertEqual(rows[1]["matched_keywords"], ["AI", "LLM"])
+            self.assertEqual(rows[1]["matched_keywords"], [])
+            self.assertEqual(rows[1]["search_keyword"], "")
+            self.assertEqual(rows[2]["matched_keywords"], ["AI", "LLM"])
             self.assertFalse(bridge.state_file.exists())
 
             self.assertEqual(sleeps, [31.0])
             self.assertEqual(len(requester.calls), 2)
             for url, kwargs in requester.calls:
                 self.assertTrue(url.endswith("/new/.rss"))
-                self.assertEqual(kwargs["params"], {"limit": 10})
+                self.assertEqual(kwargs["params"], {"limit": 100})
                 self.assertIn("application/atom+xml", kwargs["headers"]["Accept"])
                 self.assertEqual(kwargs["timeout"], 30.0)
 
             self.assertEqual(bridge.acknowledge(), "")
             state = json.loads(bridge.state_file.read_text(encoding="utf-8"))
-            self.assertEqual(state["seen_ids"], ["1", "3", "2"])
+            self.assertEqual(state["seen_ids"], ["1", "ignored", "3", "2"])
+
+    def test_optional_cross_subreddit_cap_is_applied_after_recency_sort(self):
+        requester = FakeRequester(
+            {
+                "MachineLearning": FakeResponse(
+                    text=atom_feed(
+                        atom_entry(
+                            "older",
+                            "Older post",
+                            "2026-07-24T09:00:00+00:00",
+                        )
+                    )
+                ),
+                "LocalLLaMA": FakeResponse(
+                    text=atom_feed(
+                        atom_entry(
+                            "newer",
+                            "Newer post",
+                            "2026-07-24T11:00:00+00:00",
+                            subreddit="LocalLLaMA",
+                        )
+                    )
+                ),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = self.make_bridge(temp_dir, requester)
+            bridge.limit = 1
+            result = bridge.run()
+            rows = [
+                json.loads(line)
+                for line in result.data_files[0].read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+
+        self.assertEqual([row["id"] for row in rows], ["newer"])
 
     def test_seen_and_old_entries_are_skipped(self):
         requester = FakeRequester(

@@ -1,7 +1,7 @@
 """AI Content Miner 工作流主入口。
 
 职责仅限程序编排：配置检查 → 按平台路由 → 本次爬取 → 数据加载
-→ 四层筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
+→ 平台筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
 """
 
 from __future__ import annotations
@@ -44,6 +44,10 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         from workflows.twitter import validate_twitter_runtime_config
 
         return validate_twitter_runtime_config(bridge)
+    if getattr(bridge, "platform", "") == "reddit":
+        from workflows.reddit import validate_reddit_runtime_config
+
+        return validate_reddit_runtime_config(bridge)
 
     errors: List[str] = []
 
@@ -103,7 +107,6 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             validate_github_quality_config()
         except (GithubEmbeddingError, ValueError) as exc:
             errors.append(str(exc))
-            
     score_threshold = getattr(config, "SCORE_THRESHOLD", None)
     if (
         not isinstance(score_threshold, (int, float))
@@ -117,7 +120,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
 
 
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
-    """仅对通过四层筛选且 0–10 综合分达标的文章生成输出。"""
+    """仅对通过平台筛选且 0–10 综合分达标的文章生成输出。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
@@ -240,12 +243,17 @@ def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
         )
     return passed_items, len(filtered["dropped"])
 
+
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
     if getattr(bridge, "platform", "") == "x":
         from workflows.twitter import run_twitter_workflow
 
         return run_twitter_workflow(bridge)
+    if getattr(bridge, "platform", "") == "reddit":
+        from workflows.reddit import run_reddit_workflow
+
+        return run_reddit_workflow(bridge)
 
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
@@ -358,7 +366,7 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print("📊 统计：")
     print(f"   - 读取文章: {len(articles)} 篇")
     print(f"   - 通过筛选: {len(passed_items)} 篇")
-    print(f"   - 四层筛选淘汰: {filtered_count} 篇")
+    print(f"   - 平台筛选淘汰: {filtered_count} 篇")
     print(f"   - 生成报告: {generated_count} 篇")
     print(f"   - 推送报告: {len(final_items)} 篇")
     print("=" * 70)

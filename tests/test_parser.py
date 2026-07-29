@@ -158,7 +158,9 @@ class ParserTest(unittest.TestCase):
             )
             with patch("utils.parser.config.CRAWL_LIMIT", 20):
                 articles = load_articles(
-                    [data_file], platform="reddit", allow_manual_fallback=False
+                    [data_file],
+                    platform="reddit",
+                    allow_manual_fallback=False,
                 )
 
         self.assertEqual(len(articles), 1)

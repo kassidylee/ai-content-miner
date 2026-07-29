@@ -33,6 +33,20 @@ class MainTest(unittest.TestCase):
             errors,
         )
 
+    def test_runtime_config_validates_reddit_pipeline(self):
+        bridge = SimpleNamespace(
+            platform="reddit",
+            validate=lambda: [],
+        )
+        with patch(
+            "workflows.reddit.validate_reddit_runtime_config",
+            return_value=[],
+        ) as validate:
+            errors = main.validate_runtime_config(bridge)
+
+        self.assertEqual(errors, [])
+        validate.assert_called_once_with(bridge)
+
     def test_crawler_failure_returns_nonzero_and_stops_pipeline(self):
         bridge = SimpleNamespace(
             platform="xhs",
@@ -142,6 +156,23 @@ class MainTest(unittest.TestCase):
                     enable_author_profile=True,
                 )
                 report_generator.assert_called_once()
+
+    def test_reddit_routes_to_dedicated_pipeline(self):
+        bridge = SimpleNamespace(platform="reddit")
+        with patch(
+            "workflows.reddit.run_reddit_workflow",
+            return_value=0,
+        ) as reddit_workflow, patch(
+            "main.load_articles",
+        ) as generic_loader, patch(
+            "main.generate_reports",
+        ) as generic_reports:
+            exit_code = main.run_workflow(bridge)
+
+        self.assertEqual(exit_code, main.EXIT_OK)
+        reddit_workflow.assert_called_once_with(bridge)
+        generic_loader.assert_not_called()
+        generic_reports.assert_not_called()
 
     def test_generate_reports_uses_normalized_zero_to_ten_threshold(self):
         below_threshold = {
