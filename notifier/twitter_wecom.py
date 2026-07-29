@@ -32,11 +32,8 @@ def validate_twitter_wecom_config() -> List[str]:
     return []
 
 
-def send_twitter_wecom(
-    items: List[Dict],
-    more_count: int = 0,
-) -> bool:
-    """发送主推内容，并提示页面中的补充条目。"""
+def send_twitter_wecom(items: List[Dict]) -> bool:
+    """发送与每日 HTML 完全一致的精选内容。"""
     if validate_twitter_wecom_config():
         return False
     import requests
@@ -44,11 +41,11 @@ def send_twitter_wecom(
     lines = [
         f"# Twitter 信息流 - {datetime.now():%Y-%m-%d}",
         "",
-        f"- 今日主推：{min(len(items), config.TWITTER_DAILY_PRIMARY_LIMIT)} 条",
+        f"- 今日精选：{min(len(items), config.TWITTER_DAILY_LIMIT)} 条",
         "",
     ]
     for index, item in enumerate(
-        items[: int(config.TWITTER_DAILY_PRIMARY_LIMIT)],
+        items[: int(config.TWITTER_DAILY_LIMIT)],
         start=1,
     ):
         source_url = str(item.get("source_url", "") or "").strip()
@@ -62,9 +59,6 @@ def send_twitter_wecom(
             safe_url = source_url.replace("(", "%28").replace(")", "%29")
             lines.append(f"- [查看原帖]({safe_url})")
         lines.append("")
-    if more_count:
-        lines.append(f"- 页面另有 {more_count} 条补充内容")
-
     content = "\n".join(lines)
     if len(content.encode("utf-8")) > 4096:
         content = "\n".join(lines[:4] + ["消息过长，请查看聚合页面。"])

@@ -42,8 +42,6 @@ def make_bridge(acknowledge=None):
 def make_selection(item):
     return {
         "digest_date": "2026-07-29",
-        "primary": [item],
-        "more": [],
         "selected": [item],
         "archived": [],
         "comment_dropped": [],
@@ -142,8 +140,7 @@ class TwitterWorkflowTest(unittest.TestCase):
         self.assertEqual(exit_code, twitter.EXIT_OK)
         store.assert_called_once_with([item])
         render.assert_called_once_with(
-            primary_items=[item],
-            more_items=[],
+            items=[item],
             digest_date="2026-07-29",
         )
         acknowledge.assert_called_once_with()
@@ -183,9 +180,9 @@ class TwitterWorkflowTest(unittest.TestCase):
             "dropped": [],
         }
 
-        def notify(_items, more_count):
+        def notify(_items):
             events.append("notify")
-            self.assertEqual(more_count, 0)
+            self.assertEqual(_items, [item])
             return False
 
         with patch(

@@ -136,24 +136,15 @@ def _card(item: Dict) -> str:
 
 
 def _document(
-    primary_items: List[Dict],
-    more_items: List[Dict],
+    items: List[Dict],
     digest_date: str,
 ) -> str:
-    primary_cards = "\n".join(_card(item) for item in primary_items)
-    if not primary_cards:
-        primary_cards = (
+    cards = "\n".join(_card(item) for item in items)
+    if not cards:
+        cards = (
             '<section class="empty"><h2>暂无符合条件的内容</h2>'
             "<p>页面会在后续采集到保留内容时自动更新。</p></section>"
         )
-    more_cards = "\n".join(_card(item) for item in more_items)
-    more_section = ""
-    if more_cards:
-        more_section = f"""
-    <details class="more-section">
-      <summary>更多值得关注（{len(more_items)}）</summary>
-      <section class="feed more-feed">{more_cards}</section>
-    </details>"""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -188,12 +179,8 @@ def _document(
     .level-3 {{ background:#fff; border:1px solid #c8d7f2; }}
     .metrics {{ gap:12px; font-size:12px; }}
     .source-details {{ margin-top:8px; color:var(--muted); font-size:13px; }}
-    .source-details summary,.more-section>summary {{ cursor:pointer; }}
+    .source-details summary {{ cursor:pointer; }}
     .references a {{ color:var(--accent); }}
-    .more-section {{ margin-top:20px; }}
-    .more-section>summary {{ padding:12px 16px; background:var(--surface);
-      border:1px solid var(--line); border-radius:10px; font-weight:600; }}
-    .more-feed {{ margin-top:10px; }}
     @media (max-width:560px) {{
       main {{ width:min(100% - 16px,760px); margin-top:20px; }}
       .card,.empty {{ padding:13px; }}
@@ -206,10 +193,9 @@ def _document(
   <main>
     <header>
       <h1>Twitter 每日精选</h1>
-      <div class="subtitle">{_text(digest_date)} · 主推 {len(primary_items)} 条</div>
+      <div class="subtitle">{_text(digest_date)} · 精选 {len(items)} 条</div>
     </header>
-    <section class="feed">{primary_cards}</section>
-    {more_section}
+    <section class="feed">{cards}</section>
   </main>
 </body>
 </html>
@@ -219,41 +205,26 @@ def _document(
 def render_twitter_feed(
     items: Optional[List[Dict]] = None,
     *,
-    primary_items: Optional[List[Dict]] = None,
-    more_items: Optional[List[Dict]] = None,
     digest_date: Optional[str] = None,
 ) -> Path:
-    """生成最多 8 条主推和 4 条补充的每日页面。"""
-    explicit_groups = primary_items is not None or more_items is not None
-    if explicit_groups and items is not None:
-        raise TwitterFeedRenderError("不能同时传入 items 和分组内容")
-    if explicit_groups:
-        primary = list(primary_items or [])
-        more = list(more_items or [])
+    """生成与企业微信共享同一列表的每日精选页面。"""
+    daily_limit = int(config.TWITTER_DAILY_LIMIT)
+    if items is None:
+        # 兼容独立重建页面的调用方式：结果存储可能返回多日保留记录，
+        # 页面只读取配置允许的前 N 条。工作流显式传入当日选择时仍严格
+        # 校验数量，防止上游选择器与展示层对每日上限产生不同理解。
+        feed_items = list(load_twitter_feed_items()[:daily_limit])
     else:
-        feed_items = items if items is not None else load_twitter_feed_items()
-        primary_limit = int(config.TWITTER_DAILY_PRIMARY_LIMIT)
-        more_limit = int(config.TWITTER_DAILY_MORE_LIMIT)
-        primary = list(feed_items[:primary_limit])
-        more = list(
-            feed_items[primary_limit : primary_limit + more_limit]
-        )
-    if len(primary) > int(config.TWITTER_DAILY_PRIMARY_LIMIT):
-        raise TwitterFeedRenderError("Twitter 主推内容超过每日上限")
-    if len(more) > int(config.TWITTER_DAILY_MORE_LIMIT):
-        raise TwitterFeedRenderError("Twitter 补充内容超过每日上限")
-    primary_ids = {
+        feed_items = list(items)
+    if len(feed_items) > daily_limit:
+        raise TwitterFeedRenderError("Twitter 精选内容超过每日上限")
+    item_ids = [
         str(item.get("id", "") or "")
-        for item in primary
+        for item in feed_items
         if str(item.get("id", "") or "")
-    }
-    more_ids = {
-        str(item.get("id", "") or "")
-        for item in more
-        if str(item.get("id", "") or "")
-    }
-    if primary_ids.intersection(more_ids):
-        raise TwitterFeedRenderError("Twitter 主推和补充内容存在重复")
+    ]
+    if len(item_ids) != len(set(item_ids)):
+        raise TwitterFeedRenderError("Twitter 精选内容存在重复")
     report_date = digest_date or datetime.now().date().isoformat()
     destination = Path(config.TWITTER_REPORT_FILE)
     temporary = destination.with_name(
@@ -262,7 +233,7 @@ def render_twitter_feed(
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(
-            _document(primary, more, report_date),
+            _document(feed_items, report_date),
             encoding="utf-8",
         )
         temporary.replace(destination)
