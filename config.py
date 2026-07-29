@@ -272,7 +272,9 @@ REDDIT_EMBEDDING_BASE_URL = os.environ.get(
 REDDIT_EMBEDDING_MODEL = os.environ.get(
     "REDDIT_EMBEDDING_MODEL", EMBEDDING_MODEL
 )
-REDDIT_EMBEDDING_BATCH_SIZE = 20
+# DashScope text-embedding-v4 的同步接口单批最多接收 10 条文本。
+# Reddit 会一次处理完整 RSS 候选集，因此必须在这里分批，而不是减少采集量。
+REDDIT_EMBEDDING_BATCH_SIZE = min(EMBEDDING_BATCH_SIZE, 10)
 REDDIT_EMBEDDING_MAX_CHARS = 6000
 REDDIT_EMBEDDING_FILTER_MODE = "enforce"  # shadow | enforce
 REDDIT_INTEREST_TOPICS = [

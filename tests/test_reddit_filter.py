@@ -3,11 +3,15 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import config
 from analyzer.reddit_common import (
     append_reddit_filter_stage,
     reddit_filter_stage,
 )
-from analyzer.reddit_embedding import build_reddit_embedding_text
+from analyzer.reddit_embedding import (
+    _embed_texts,
+    build_reddit_embedding_text,
+)
 from analyzer.reddit_pipeline import (
     run_reddit_filters,
     validate_reddit_pipeline_config,
@@ -98,6 +102,19 @@ class Client:
 
 
 class RedditFilterTest(unittest.TestCase):
+    def test_reddit_embedding_batches_full_candidate_set_by_ten(self):
+        texts = [f"candidate-{index}" for index in range(23)]
+        client = Client({
+            text: [float(index), 1.0]
+            for index, text in enumerate(texts)
+        })
+
+        vectors = _embed_texts(client, texts)
+
+        self.assertEqual(config.REDDIT_EMBEDDING_BATCH_SIZE, 10)
+        self.assertEqual([len(call) for call in client.calls], [10, 10, 3])
+        self.assertEqual(len(vectors), len(texts))
+
     def test_pipeline_uses_reddit_rules_embedding_and_quality(self):
         kept = item()
         unrelated = item(
