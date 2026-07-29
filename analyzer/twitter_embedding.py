@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-import math
 import re
 from numbers import Real
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
 from analyzer.twitter_common import append_twitter_filter_stage
+from utils.embedding import (
+    EmbeddingError,
+    cosine_similarity as shared_cosine_similarity,
+    encode,
+    validate_config as validate_shared_embedding_config,
+)
 
 
 class TwitterEmbeddingError(RuntimeError):
@@ -58,29 +63,11 @@ def cosine_similarity(
     vector_a: Sequence[Real],
     vector_b: Sequence[Real],
 ) -> float:
-    if len(vector_a) != len(vector_b):
-        raise TwitterEmbeddingError("Embedding 向量维度不一致")
-    if not vector_a:
-        return 0.0
-    if any(not isinstance(value, Real) for value in vector_a) or any(
-        not isinstance(value, Real) for value in vector_b
-    ):
-        raise TwitterEmbeddingError("Embedding 向量包含非数值元素")
-    norm_a = math.sqrt(sum(float(value) ** 2 for value in vector_a))
-    norm_b = math.sqrt(sum(float(value) ** 2 for value in vector_b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    dot = sum(
-        float(value_a) * float(value_b)
-        for value_a, value_b in zip(vector_a, vector_b)
-    )
-    return dot / (norm_a * norm_b)
-
-
-def _field(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
+    """保留 Twitter 原有异常类型，同时复用共享余弦实现。"""
+    try:
+        return shared_cosine_similarity(vector_a, vector_b)
+    except ValueError as exc:
+        raise TwitterEmbeddingError(str(exc)) from exc
 
 
 def _topics() -> List[Dict[str, object]]:
@@ -119,7 +106,16 @@ def _topics() -> List[Dict[str, object]]:
     return normalized
 
 
-def validate_twitter_embedding_config() -> None:
+def validate_twitter_embedding_config(
+    require_credentials: bool = True,
+) -> None:
+    try:
+        validate_shared_embedding_config(
+            require_credentials=require_credentials
+        )
+    except EmbeddingError as exc:
+        raise TwitterEmbeddingError(str(exc)) from exc
+
     mode = str(config.TWITTER_EMBEDDING_FILTER_MODE).strip().casefold()
     if mode not in {"shadow", "enforce"}:
         raise TwitterEmbeddingError(
@@ -145,53 +141,19 @@ def validate_twitter_embedding_config() -> None:
 
 
 def _embed_texts(
-    client: object,
+    client: Optional[object],
     texts: Sequence[str],
 ) -> List[List[float]]:
-    vectors: List[List[float]] = []
-    batch_size = int(config.TWITTER_EMBEDDING_BATCH_SIZE)
-    for start in range(0, len(texts), batch_size):
-        batch = list(texts[start : start + batch_size])
-        try:
-            response = client.embeddings.create(
-                model=config.TWITTER_EMBEDDING_MODEL,
-                input=batch,
-            )
-        except Exception as exc:
-            raise TwitterEmbeddingError(
-                f"Embedding API 请求失败：{type(exc).__name__}"
-            ) from exc
-
-        data = _field(response, "data")
-        if not isinstance(data, list) or len(data) != len(batch):
-            raise TwitterEmbeddingError(
-                "Embedding API 返回数量与输入不一致"
-            )
-        ordered: List[Optional[List[float]]] = [None] * len(batch)
-        for entry in data:
-            index = _field(entry, "index")
-            vector = _field(entry, "embedding")
-            if not isinstance(index, int) or not 0 <= index < len(batch):
-                raise TwitterEmbeddingError(
-                    "Embedding API 返回了无效 index"
-                )
-            if ordered[index] is not None:
-                raise TwitterEmbeddingError(
-                    "Embedding API 返回了重复 index"
-                )
-            if not isinstance(vector, list) or any(
-                not isinstance(value, Real) for value in vector
-            ):
-                raise TwitterEmbeddingError(
-                    "Embedding API 返回了无效向量"
-                )
-            ordered[index] = [float(value) for value in vector]
-        if any(vector is None for vector in ordered):
-            raise TwitterEmbeddingError(
-                "Embedding API 返回的 index 不完整"
-            )
-        vectors.extend(vector for vector in ordered if vector is not None)
-    return vectors
+    """调用共享客户端，但向上层保留 Twitter 专用错误类型。"""
+    try:
+        return encode(
+            texts,
+            client=client,
+            model=config.TWITTER_EMBEDDING_MODEL,
+            batch_size=config.TWITTER_EMBEDDING_BATCH_SIZE,
+        )
+    except EmbeddingError as exc:
+        raise TwitterEmbeddingError(str(exc)) from exc
 
 
 def apply_twitter_embedding_filter(
@@ -202,14 +164,11 @@ def apply_twitter_embedding_filter(
     candidates = list(items)
     if not candidates:
         return [], []
-    validate_twitter_embedding_config()
+    validate_twitter_embedding_config(
+        require_credentials=client is None
+    )
     mode = str(config.TWITTER_EMBEDDING_FILTER_MODE).strip().casefold()
     topics = _topics()
-    if client is None:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
-
     passed: List[Dict] = []
     dropped: List[Dict] = []
     nonempty_items: List[Dict] = []
@@ -308,3 +267,22 @@ def apply_twitter_embedding_filter(
         )
         (dropped if decision == "drop" else passed).append(item)
     return passed, dropped
+
+
+def probe_twitter_embedding_service(
+    client: Optional[object] = None,
+) -> int:
+    """请求一个主题向量，返回维度，用于完整爬取前的连通性检查。"""
+    validate_twitter_embedding_config(
+        require_credentials=client is None
+    )
+    topics = _topics()
+    vectors = _embed_texts(
+        client,
+        [str(topics[0]["description"])],
+    )
+    if not vectors or not vectors[0]:
+        raise TwitterEmbeddingError(
+            "Twitter Embedding 探测返回了空向量"
+        )
+    return len(vectors[0])

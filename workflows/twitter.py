@@ -12,8 +12,14 @@ from analyzer.twitter_comments import (
     TwitterCommentConfigError,
     twitter_comment_settings,
 )
+from analyzer.twitter_daily_selector import (
+    TwitterDailySelectionConfigError,
+    select_twitter_daily_items,
+    validate_twitter_daily_config,
+)
 from analyzer.twitter_embedding import (
     TwitterEmbeddingError,
+    probe_twitter_embedding_service,
     validate_twitter_embedding_config,
 )
 from analyzer.twitter_enricher import (
@@ -21,7 +27,7 @@ from analyzer.twitter_enricher import (
     enrich_twitter_items,
     validate_twitter_enrichment_config,
 )
-from analyzer.twitter_pipeline import run_twitter_filters
+from analyzer.twitter_pipeline import run_twitter_preselection_filters
 from analyzer.twitter_rules import validate_twitter_rule_config
 from crawler.base import CollectorBridge, CrawlRunResult
 from notifier.twitter_wecom import (
@@ -36,6 +42,7 @@ from utils.twitter_parser import load_twitter_items
 from utils.twitter_result_store import (
     TwitterResultStoreError,
     append_twitter_results,
+    load_recent_twitter_digest_items,
 )
 
 
@@ -97,6 +104,10 @@ def validate_twitter_runtime_config(
     except TwitterCommentConfigError as exc:
         errors.append(str(exc))
     try:
+        validate_twitter_daily_config()
+    except TwitterDailySelectionConfigError as exc:
+        errors.append(str(exc))
+    try:
         validate_twitter_enrichment_config()
     except TwitterEnrichmentConfigError as exc:
         errors.append(str(exc))
@@ -117,17 +128,29 @@ def validate_twitter_runtime_config(
 
 def _finalize(
     all_items: Sequence[Dict],
-    kept_items: Sequence[Dict],
+    selected_items: Sequence[Dict],
 ) -> None:
-    kept_objects = {id(item) for item in kept_items}
+    selected_objects = {id(item) for item in selected_items}
     processed_at = datetime.now(timezone.utc)
     for item in all_items:
         metadata = item["filter_metadata"]
-        if id(item) in kept_objects:
+        publication = item.get("publication_metadata", {})
+        if id(item) in selected_objects:
             metadata["final_decision"] = "keep"
             metadata["final_reason_codes"] = [
-                "TWITTER_FILTER_PIPELINE_PASSED"
+                "TWITTER_DAILY_SELECTED"
             ]
+        elif metadata.get("final_decision") == "drop":
+            pass
+        elif (
+            isinstance(publication, dict)
+            and publication.get("decision")
+            in {"archive", "cluster_duplicate"}
+        ):
+            metadata["final_decision"] = "archive"
+            metadata["final_reason_codes"] = list(
+                publication.get("reason_codes", [])
+            )
         elif metadata.get("final_decision") == "pending":
             metadata["final_decision"] = "drop"
             metadata["final_reason_codes"] = [
@@ -142,13 +165,24 @@ def run_twitter_workflow(
     enrichment_client: Optional[object] = None,
 ) -> int:
     """运行 Twitter 专用流程，不调用任何旧平台处理模块。"""
-    print("\n[Twitter 1/7] 启动数据采集")
+    if getattr(config, "TWITTER_EMBEDDING_ENABLED", True):
+        print("\n[Twitter 0/8] 验证 Embedding 服务")
+        try:
+            dimensions = probe_twitter_embedding_service(
+                client=embedding_client,
+            )
+        except TwitterEmbeddingError as exc:
+            print(f"Twitter Embedding 预检失败：{exc}")
+            return EXIT_EMBEDDING
+        print(f"Twitter Embedding 预检通过：向量维度 {dimensions}")
+
+    print("\n[Twitter 1/8] 启动数据采集")
     crawl_result: CrawlRunResult = bridge.run()
     if not crawl_result.success:
         print(f"Twitter 采集失败：{crawl_result.error}")
         return EXIT_CRAWLER
 
-    print("\n[Twitter 2/7] 加载并标准化本次数据")
+    print("\n[Twitter 2/8] 加载并标准化本次数据")
     try:
         items = load_twitter_items(crawl_result.data_files)
     except ValueError as exc:
@@ -158,37 +192,52 @@ def run_twitter_workflow(
         print("本次运行没有可处理的 Twitter 内容")
         return EXIT_NO_DATA
 
-    print("\n[Twitter 3/7] 执行三层筛选")
+    print("\n[Twitter 3/8] 执行规则和 Embedding 筛选")
     reply_provider = (
         bridge
         if callable(getattr(bridge, "fetch_replies", None))
         else None
     )
     try:
-        filtered = run_twitter_filters(
+        filtered = run_twitter_preselection_filters(
             items,
             embedding_client=embedding_client,
-            reply_provider=reply_provider,
         )
     except TwitterEmbeddingError as exc:
         print(f"Twitter Embedding 筛选失败：{exc}")
         return EXIT_EMBEDDING
-    except TwitterCommentConfigError as exc:
-        print(f"Twitter 回复筛选配置无效：{exc}")
+
+    print("\n[Twitter 4/8] 生成每日 8+4 选择")
+    try:
+        recent_history = load_recent_twitter_digest_items()
+    except TwitterResultStoreError as exc:
+        print(str(exc))
+        return EXIT_STORE
+    try:
+        selection = select_twitter_daily_items(
+            filtered["passed"],
+            reply_provider=reply_provider,
+            recent_history=recent_history,
+        )
+    except (
+        TwitterCommentConfigError,
+        TwitterDailySelectionConfigError,
+    ) as exc:
+        print(f"Twitter 每日选择配置无效：{exc}")
         return EXIT_CONFIG
 
-    print("\n[Twitter 4/7] 生成极简摘要和分层标签")
+    print("\n[Twitter 5/8] 生成极简摘要和分层标签")
     try:
-        kept_items = enrich_twitter_items(
-            filtered["passed"],
+        selected_items = enrich_twitter_items(
+            selection["selected"],
             client=enrichment_client,
         )
     except TwitterEnrichmentConfigError as exc:
         print(f"Twitter 摘要或标签配置无效：{exc}")
         return EXIT_CONFIG
-    _finalize(filtered["all_items"], kept_items)
+    _finalize(filtered["all_items"], selected_items)
 
-    print("\n[Twitter 5/7] 写入结构化结果")
+    print("\n[Twitter 6/8] 写入结构化结果")
     try:
         result_path = append_twitter_results(filtered["all_items"])
     except TwitterResultStoreError as exc:
@@ -196,9 +245,13 @@ def run_twitter_workflow(
         return EXIT_STORE
     print(f"Twitter 结构化结果已写入 {result_path}")
 
-    print("\n[Twitter 6/7] 更新聚合页面")
+    print("\n[Twitter 7/8] 更新每日页面")
     try:
-        report_path = render_twitter_feed()
+        report_path = render_twitter_feed(
+            primary_items=selection["primary"],
+            more_items=selection["more"],
+            digest_date=str(selection["digest_date"]),
+        )
     except (TwitterFeedRenderError, TwitterResultStoreError) as exc:
         print(str(exc))
         return EXIT_RENDER
@@ -209,8 +262,11 @@ def run_twitter_workflow(
         print(f"Twitter 采集状态保存失败：{state_error}")
         return EXIT_STATE
 
-    print("\n[Twitter 7/7] 可选通知")
-    if config.TWITTER_ENABLE_WECOM and not send_twitter_wecom(kept_items):
+    print("\n[Twitter 8/8] 可选通知")
+    if config.TWITTER_ENABLE_WECOM and not send_twitter_wecom(
+        selection["primary"],
+        more_count=len(selection["more"]),
+    ):
         print("Twitter 通知失败，结果和采集状态已保留")
         return EXIT_NOTIFY
     if not config.TWITTER_ENABLE_WECOM:
@@ -218,6 +274,8 @@ def run_twitter_workflow(
 
     print(
         f"Twitter 工作流完成：候选 {len(items)}，"
-        f"保留 {len(kept_items)}，删除 {len(filtered['dropped'])}"
+        f"预筛通过 {len(filtered['passed'])}，"
+        f"主推 {len(selection['primary'])}，"
+        f"补充 {len(selection['more'])}"
     )
     return EXIT_OK

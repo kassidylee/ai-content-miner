@@ -1,14 +1,16 @@
 import math
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import config
 from analyzer.twitter_comments import apply_twitter_comment_filter
 from analyzer.twitter_embedding import (
     TwitterEmbeddingError,
     apply_twitter_embedding_filter,
     build_twitter_embedding_text,
     cosine_similarity,
+    probe_twitter_embedding_service,
 )
 from analyzer.twitter_pipeline import run_twitter_filters
 from analyzer.twitter_rules import apply_twitter_rules
@@ -85,6 +87,71 @@ class FakeReplyProvider:
 
 
 class TwitterPipelineTest(unittest.TestCase):
+    def test_embedding_probe_reaches_native_dashscope_client(self):
+        text_embedding = SimpleNamespace(
+            call=Mock(
+                return_value=SimpleNamespace(
+                    status_code=200,
+                    output={
+                        "embeddings": [
+                            {
+                                "text_index": 0,
+                                "embedding": [1.0, 0.0],
+                            }
+                        ]
+                    },
+                )
+            )
+        )
+        fake_module = SimpleNamespace(TextEmbedding=text_embedding)
+        topic_text = str(config.TWITTER_INTEREST_TOPICS[0]["description"])
+
+        with patch.dict(
+            "sys.modules",
+            {"dashscope": fake_module},
+        ), patch.object(
+            config,
+            "EMBEDDING_PROVIDER",
+            "dashscope",
+        ), patch.object(
+            config,
+            "EMBEDDING_API_KEY",
+            "test-key",
+        ), patch.object(
+            config,
+            "TWITTER_EMBEDDING_MODEL",
+            "text-embedding-v4",
+        ):
+            dimensions = probe_twitter_embedding_service()
+
+        self.assertEqual(dimensions, 2)
+        text_embedding.call.assert_called_once_with(
+            model="text-embedding-v4",
+            input=[topic_text],
+            api_key="test-key",
+        )
+
+    def test_embedding_probe_uses_shared_client_without_local_credentials(self):
+        topic_text = str(config.TWITTER_INTEREST_TOPICS[0]["description"])
+        client = FakeEmbeddingClient({topic_text: [1.0, 0.0]})
+
+        with patch(
+            "utils.embedding.config.EMBEDDING_API_KEY",
+            "",
+        ):
+            dimensions = probe_twitter_embedding_service(client=client)
+
+        self.assertEqual(dimensions, 2)
+        self.assertEqual(
+            client.embeddings.calls,
+            [
+                (
+                    config.TWITTER_EMBEDDING_MODEL,
+                    [topic_text],
+                )
+            ],
+        )
+
     def test_disabled_embedding_skips_api_and_records_audit_stage(self):
         item = make_item()
         embedding_client = FakeEmbeddingClient({})
@@ -224,6 +291,35 @@ class TwitterPipelineTest(unittest.TestCase):
             ["TWITTER_RULE_EXCLUDED_KEYWORD"],
         )
 
+    def test_rules_reject_course_promotion_before_quality_scoring(self):
+        item = make_item(
+            "全网最硬核大模型 AI Infra 开源课，包含训练、推理和代码，"
+            "现在报名即可获得完整课程。"
+        )
+        item["platform_metadata"]["lang"] = "zh"
+        item["metrics"] = {
+            "like_count": 1_000,
+            "reply_count": 100,
+            "share_count": 300,
+            "quote_count": 20,
+            "bookmark_count": 500,
+            "view_count": 100_000,
+        }
+
+        passed, dropped = apply_twitter_rules([item])
+
+        self.assertEqual(passed, [])
+        self.assertEqual(dropped, [item])
+        stage = item["filter_metadata"]["stages"][-1]
+        self.assertEqual(
+            stage["reason_codes"],
+            ["TWITTER_RULE_PROMOTION_NOT_ALLOWED"],
+        )
+        self.assertIn(
+            "开源课",
+            stage["details"]["promotion_keywords"],
+        )
+
     def test_rules_reject_relevant_but_unseen_item(self):
         item = make_item(
             "A detailed AI Agent framework comparison with tool calling "
@@ -247,7 +343,32 @@ class TwitterPipelineTest(unittest.TestCase):
             ["TWITTER_RULE_LOW_ENGAGEMENT"],
         )
 
-    def test_rules_allow_social_engagement_below_view_threshold(self):
+    def test_rules_do_not_accept_views_without_weighted_engagement(self):
+        item = make_item(
+            "A detailed AI Agent framework comparison with tool calling "
+            "benchmarks and implementation notes."
+        )
+        item["metrics"] = {
+            "like_count": 0,
+            "reply_count": 0,
+            "share_count": 0,
+            "quote_count": 0,
+            "bookmark_count": 0,
+            "view_count": 50_000,
+        }
+
+        passed, dropped = apply_twitter_rules([item])
+
+        self.assertEqual(passed, [])
+        self.assertEqual(dropped, [item])
+        stage = item["filter_metadata"]["stages"][-1]
+        self.assertEqual(
+            stage["reason_codes"],
+            ["TWITTER_RULE_LOW_ENGAGEMENT"],
+        )
+        self.assertEqual(stage["details"]["weighted_engagement"], 0)
+
+    def test_rules_allow_weighted_engagement_with_low_views(self):
         item = make_item(
             "A detailed AI Agent framework comparison with tool calling "
             "benchmarks and implementation notes."
@@ -321,6 +442,31 @@ class TwitterPipelineTest(unittest.TestCase):
             stage["details"]["evidence_domains"],
         )
         self.assertGreaterEqual(stage["details"]["technical_score"], 3)
+
+    def test_rules_allow_evidence_link_to_mature_before_social_ranking(self):
+        item = make_item(
+            "An AI Agent project release with reproducible results."
+        )
+        item["referenced_urls"] = [
+            {
+                "url": "https://github.com/example/new-agent",
+                "label": "github.com/example/new-agent",
+                "domain": "github.com",
+            }
+        ]
+        item["metrics"] = {
+            "like_count": 0,
+            "reply_count": 0,
+            "share_count": 0,
+            "quote_count": 0,
+            "bookmark_count": 0,
+            "view_count": 10,
+        }
+
+        passed, dropped = apply_twitter_rules([item])
+
+        self.assertEqual(passed, [item])
+        self.assertEqual(dropped, [])
 
     def test_rules_do_not_treat_training_and_open_source_as_depth(self):
         item = make_item(
