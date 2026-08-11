@@ -145,7 +145,12 @@ GITHUB_RESULTS_PER_QUERY = 20
 GITHUB_LOOKBACK_DAYS = 7
 GITHUB_MIN_STARS = 0
 GITHUB_TIMEOUT_SECONDS = 30
+GITHUB_REQUEST_MAX_RETRIES = int(
+    os.environ.get("GITHUB_REQUEST_MAX_RETRIES", "3")
+)
 GITHUB_README_MAX_CHARS = 6000
+GITHUB_CODE_EVIDENCE_MAX_CHARS = 9000
+GITHUB_CODE_EVIDENCE_MAX_FILES = 3
 GITHUB_STATE_FILE = os.path.join(DATA_DIR, "state", "github_seen_ids.json")
 GITHUB_SEEN_ID_LIMIT = 5000
 
@@ -622,14 +627,14 @@ WECOM_WEBHOOK = os.environ.get(
     "WECOM_WEBHOOK",
     os.environ.get("WECOM_WEBHOOK_URL", ""),
 )
-REPORT_BASE_URL = "http://192.168.1.100:8000/reports"
+REPORT_BASE_URL = ""
 
 # 腾讯云 COS 私有桶报告分发。凭据只从 .env/环境变量读取。
 COS_SECRET_ID = os.environ.get("COS_SECRET_ID", "").strip()
 COS_SECRET_KEY = os.environ.get("COS_SECRET_KEY", "").strip()
 COS_REGION = os.environ.get("COS_REGION", "ap-hongkong").strip()
 COS_BUCKET = os.environ.get("COS_BUCKET", "").strip()
-COS_PREFIX = os.environ.get("COS_PREFIX", "reports/").strip()
+COS_PREFIX = os.environ.get("COS_PREFIX", "reports").strip()
 COS_PRESIGNED_EXPIRES = int(os.environ.get("COS_PRESIGNED_EXPIRES", "2592000"))
 
 # ============================================================
@@ -657,6 +662,18 @@ LOG_LEVEL = "INFO"
 
 SCORE_TEMPERATURE = 0.2
 REPORT_TEMPERATURE = 0.25
+# Cloudflare 代理会在 120 秒后中止响应，研报请求需明显低于该上限。
+REPORT_MAX_ITEMS = int(os.environ.get("REPORT_MAX_ITEMS", "10"))
+REPORT_INPUT_MAX_CHARS = int(os.environ.get("REPORT_INPUT_MAX_CHARS", "9000"))
+REPORT_CODE_EVIDENCE_MAX_CHARS = int(
+    os.environ.get("REPORT_CODE_EVIDENCE_MAX_CHARS", "7000")
+)
+REPORT_MAX_TOKENS = int(os.environ.get("REPORT_MAX_TOKENS", "4200"))
+REPORT_TIMEOUT_SECONDS = float(os.environ.get("REPORT_TIMEOUT_SECONDS", "90"))
+REPORT_MAX_RETRIES = int(os.environ.get("REPORT_MAX_RETRIES", "3"))
+REPORT_RETRY_BACKOFF_SECONDS = int(
+    os.environ.get("REPORT_RETRY_BACKOFF_SECONDS", "10")
+)
 MAX_RETRIES = 3
 REQUEST_INTERVAL = 2
 ENABLE_LINGZAO_ANALYSIS = True

@@ -206,6 +206,8 @@ def normalize_article(raw: Dict, platform: str = "") -> Dict:
         "comments": _coerce_count(comments),
         "collects": _coerce_count(collects),
         "shares": _coerce_count(shares),
+        "code_evidence": str(raw.get("code_evidence", "") or ""),
+        "evidence_manifest": list(raw.get("evidence_manifest", []) or []),
         "raw": raw
     }
 

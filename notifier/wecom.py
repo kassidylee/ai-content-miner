@@ -1,20 +1,20 @@
-"""Enterprise WeChat Markdown V2 notifications."""
+"""企业微信群机器人：紧凑 Markdown 卡片加 COS 在线阅读/下载链接。"""
 
 from __future__ import annotations
 
-import os
 import re
 import time
-from datetime import datetime
-from typing import Dict, List
-from urllib.parse import quote, urlparse
+from typing import Dict, List, Tuple
 
 import requests
 
 import config
 
 
-MARKDOWN_V2_SPECIALS = r"\\_*[]()~`>#+-=|{}.!"
+SEND_GAP_SECONDS = 4.0
+REPORTS_PER_CARD = 3
+MAX_REPORTS_PER_PUSH = 9
+MAX_MARKDOWN_BYTES = 4096
 
 
 def validate_config() -> bool:
@@ -22,244 +22,197 @@ def validate_config() -> bool:
     if not webhook:
         print("   ❌ WECOM_WEBHOOK 未配置")
         return False
-    if not _is_http_url(webhook):
-        print("   ❌ WECOM_WEBHOOK 不是有效的 http/https 地址")
+    if not re.match(
+        r"^https://qyapi\.weixin\.qq\.com/cgi-bin/webhook/send\?key=[^&]+$",
+        webhook,
+    ):
+        print("   ❌ WECOM_WEBHOOK 格式无效，请使用群机器人 Webhook")
         return False
 
-    placeholders = (
-        "your-webhook-key",
-        "your-key",
-        "your-api-key-here",
-        "sk-xxxxx",
-        "example.com",
-    )
-    if any(value in webhook.lower() for value in placeholders):
-        print("   ❌ WECOM_WEBHOOK 仍包含占位值")
+    cos_required = {
+        "COS_SECRET_ID": getattr(config, "COS_SECRET_ID", ""),
+        "COS_SECRET_KEY": getattr(config, "COS_SECRET_KEY", ""),
+        "COS_REGION": getattr(config, "COS_REGION", ""),
+        "COS_BUCKET": getattr(config, "COS_BUCKET", ""),
+    }
+    missing = [
+        name for name, value in cos_required.items()
+        if not str(value or "").strip()
+    ]
+    if missing:
+        print(f"   ❌ COS 配置缺失：{', '.join(missing)}")
         return False
-
-    base_url = str(getattr(config, "REPORT_BASE_URL", "") or "").strip()
-    if not _is_http_url(base_url):
-        print("   ❌ REPORT_BASE_URL 不是有效的 http/https 地址")
-        return False
-    if "127.0.0.1" in base_url or "localhost" in base_url:
-        print("   ⚠️ REPORT_BASE_URL 是本机地址，企业微信用户无法访问")
     return True
 
 
-def _is_http_url(value: str) -> bool:
-    parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """按 UTF-8 字节数截断，避免中文导致 Markdown 超过 4096 字节。"""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
-def escape_markdown_v2(value: object) -> str:
-    """Escape ordinary text while preserving official Markdown V2 syntax."""
+def _escape_markdown(value: object) -> str:
+    """转义用户内容中的企业微信 Markdown 特殊字符。"""
     text = str(value or "")
-    escaped = []
+    specials = r"\\_*[]()~`>#+-=|{}.!"
+    result = []
+
     for char in text:
-        if char in MARKDOWN_V2_SPECIALS:
-            escaped.append("\\")
-        escaped.append(char)
-    return "".join(escaped)
+        if char in specials:
+            result.append("\\")
+        result.append(char)
+
+    return "".join(result)
 
 
-def send_markdown_v2(content: str) -> bool:
-    payload = {
-        "msgtype": "markdown_v2",
-        "markdown_v2": {"content": content},
-    }
+def build_compact_card(
+    index: int,
+    item: Dict,
+        summary_limit: int = 180,
+) -> str:
+    """构建每篇研报对应的紧凑企业微信 Markdown 卡片。"""
+    article = item.get("article", {})
+    title = str(article.get("title", "无标题")).strip()[:80]
+    category = str(item.get("category", "其他")).strip()[:20]
+    summary = str(item.get("summary", "未生成摘要")).strip()[:summary_limit]
+    total_score = float(item.get("total_score", 0) or 0)
+    dimensions = item.get("dimensions", [])
+    scores = item.get("scores", [])
+    preview_url = str(item.get("_preview_url", "") or "").strip()
+    download_url = str(item.get("_download_url", "") or "").strip()
+
+    score_parts = [
+        f"{str(name)[:10]} {float(value):.1f}"
+        for name, value in zip(dimensions[:3], scores[:3])
+    ]
+    score_text = " · ".join(score_parts) if score_parts else f"综合 {total_score:.1f}"
+
+    links = " ｜ ".join(
+        link for link in (
+            f"[在线阅读]({preview_url})" if preview_url else "",
+            f"[下载研报]({download_url})" if download_url else "",
+        ) if link
+    )
+    if not links:
+        links = "<font color=\"warning\">COS 链接缺失</font>"
+
+    return (
+        f"### 📄 {index}. {_escape_markdown(title)}\n"
+        f"> 分类：<font color=\"info\">{_escape_markdown(category)}</font>\n"
+        f"> 总分：<font color=\"warning\">{total_score:.1f}/10</font>\n\n"
+        f"{_escape_markdown(summary)}\n\n"
+        f"**评分卡**：{_escape_markdown(score_text)}\n\n"
+        f"{links}"
+    )
+
+
+def build_report_batch(start_index: int, items: List[Dict]) -> str:
+    """Build one WeCom message while preserving both links per report."""
+    for summary_limit in (80, 40, 0):
+        cards = [
+            build_compact_card(index, item, summary_limit=summary_limit)
+            for index, item in enumerate(items, start=start_index)
+        ]
+        content = "\n\n---\n\n".join(cards)
+        if len(content.encode("utf-8")) <= MAX_MARKDOWN_BYTES:
+            return content
+    raise ValueError("研报链接和基础信息超过企业微信消息大小限制")
+
+
+def send_markdown(content: str) -> Tuple[bool, Dict]:
+    """发送精简 Markdown 卡片。"""
+    if len(content.encode("utf-8")) > MAX_MARKDOWN_BYTES:
+        return False, {"error": "卡片内容超过企业微信 4096 字节限制"}
     try:
         response = requests.post(
             config.WECOM_WEBHOOK,
-            json=payload,
-            timeout=10,
-        )
-        if response.status_code != 200:
-            print(f"   ❌ 企业微信 HTTP 错误: {response.status_code}")
-            print(f"   📄 响应内容: {response.text[:500]}")
-            return False
-        data = response.json()
-        if data.get("errcode") == 0:
-            return True
-        print(
-            f"   ❌ 企业微信错误: errcode={data.get('errcode')}, "
-            f"errmsg={data.get('errmsg')}"
-        )
-        print(f"   📄 响应内容: {response.text[:500]}")
-        return False
-    except requests.exceptions.Timeout:
-        print("   ❌ 企业微信连接超时（10s）")
-    except requests.exceptions.ConnectionError as exc:
-        print(f"   ❌ 企业微信连接失败: {exc}")
-    except Exception as exc:
-        print(f"   ❌ 企业微信发送异常: {exc}")
-    return False
-
-
-def sanitize_filename(title: str) -> str:
-    safe = re.sub(r"[^\w\s\u4e00-\u9fff]", "", title)
-    safe = safe.strip()[:40].replace(" ", "_")
-    return safe or "未命名"
-
-
-def get_report_link(item: Dict, base_url: str) -> str:
-    preview_url = str(item.get("_preview_url", "") or "").strip()
-    if preview_url:
-        return preview_url
-    output_path = str(item.get("_output_path", "") or "")
-    if output_path:
-        filename = os.path.basename(output_path)
-    else:
-        article = item.get("article", {})
-        title = str(article.get("title", "无标题"))
-        filename = sanitize_filename(title) + ".html"
-        print(f"   ⚠️ 未找到输出路径，使用默认链接: {filename}")
-
-    if output_path and not os.path.isfile(output_path):
-        print(f"   ⚠️ 报告文件不存在: {output_path}")
-
-    # Encode only the path segment; keep the scheme, host, and base path intact.
-    encoded_filename = quote(filename, safe="")
-    return f"{base_url.rstrip('/')}/{encoded_filename}"
-
-
-def _link(label: str, url: str) -> str:
-    # The URL must remain unescaped inside the Markdown link target.
-    return f"[{escape_markdown_v2(label)}]({url})"
-
-
-def _build_content(items: List[Dict], base_url: str) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
-    lines = [
-        f"# {escape_markdown_v2('AI 前沿日报 - ' + today)}",
-        "",
-        f"<font color=\"info\">处理文章：{len(items)} 篇</font>",
-        "",
-        "## 深度挖掘队列",
-        "",
-    ]
-
-    for index, item in enumerate(items[:10], start=1):
-        article = item.get("article", {})
-        title = str(article.get("title", "无标题"))
-        source = str(article.get("source", "未知"))
-        score = float(item.get("total_score", 0) or 0)
-        summary = str(item.get("summary", "") or "")
-        link = get_report_link(item, base_url)
-
-        lines.extend(
-            [
-                f"**{escape_markdown_v2(f'{index}. {title}')}**",
-                f"- 评分：{score:.1f}/10",
-                f"- 来源：{escape_markdown_v2(source)}",
-                f"- 核心看点：{escape_markdown_v2(summary)}",
-                f"- {_link('在线阅读', link)}",
-                "",
-            ]
+            json={
+                "msgtype": "markdown",
+                                "markdown": {
+                    "content": content,
+                },
+            },
+            timeout=30,
         )
 
-    lines.extend(
-        [
-            "---",
-            escape_markdown_v2("本报告由 AI Frontier Knowledge Agent 自动生成"),
-        ]
-    )
-    content = "\n".join(lines)
-    if len(content.encode("utf-8")) <= 4096:
-        return content
-
-    print("   ⚠️ 消息超过 4096 字节，改为只推送前 3 篇")
-    return "\n".join(lines[:5] + lines[5:20] + lines[-2:])[:4096]
-
-
-def send_markdown(content: str) -> bool:
-    try:
-        response = requests.post(config.WECOM_WEBHOOK, json={"msgtype": "markdown", "markdown": {"content": content}}, timeout=30)
+        response.raise_for_status()
         data = response.json()
-        if response.status_code == 200 and data.get("errcode") == 0:
-            return True
-        print(f"   ❌ 企业微信 Markdown 失败: {response.text[:500]}")
+
+        if data.get("errcode") != 0:
+            print(f"   ❌ 卡片发送失败响应：{data}")
+
+        return data.get("errcode") == 0, data
+
+    except requests.RequestException as exc:
+        return False, {"error": f"卡片网络请求失败：{exc}"}
+    except ValueError as exc:
+        return False, {"error": f"卡片响应不是 JSON：{exc}"}
     except Exception as exc:
-        print(f"   ❌ 企业微信 Markdown 异常: {exc}")
-    return False
-
-
-def _webhook_key(webhook: str) -> str:
-    match = re.search(r"[?&]key=([^&]+)", webhook or "")
-    return match.group(1) if match else ""
-
-
-def upload_file(file_path: str):
-    key = _webhook_key(config.WECOM_WEBHOOK)
-    if not key:
-        return None, {"error": "WECOM_WEBHOOK 中没有 key"}
-    try:
-        with open(file_path, "rb") as file_obj:
-            response = requests.post("https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media", params={"key": key, "type": "file"}, files={"media": (os.path.basename(file_path), file_obj, "application/octet-stream")}, timeout=60)
-        data = response.json()
-        return (data.get("media_id") if data.get("errcode") == 0 else None), data
-    except Exception as exc:
-        return None, {"error": str(exc)}
-
-
-def send_file(media_id: str) -> bool:
-    try:
-        response = requests.post(config.WECOM_WEBHOOK, json={"msgtype": "file", "file": {"media_id": media_id}}, timeout=30)
-        data = response.json()
-        return response.status_code == 200 and data.get("errcode") == 0
-    except Exception as exc:
-        print(f"   ❌ 企业微信文件消息异常: {exc}")
-        return False
-
-
-def _build_classic_content(items: List[Dict]) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
-    lines = [f"### 📄 AI 前沿日报 - {today}", "", f"> 处理文章：{len(items)} 篇", ""]
-    for index, item in enumerate(items[:10], start=1):
-        article = item.get("article", {})
-        title = str(article.get("title", "无标题"))
-        source = str(article.get("source", "未知"))
-        score = float(item.get("total_score", 0) or 0)
-        summary = str(item.get("summary", "") or "")[:300]
-        preview = get_report_link(item, config.REPORT_BASE_URL)
-        download = str(item.get("_download_url", "") or "")
-        lines.extend([f"**{index}. {title}**", f"> 方向：<font color=\"info\">{source}</font>", f"评分：{score:.1f}/10", summary, f"[在线预览]({preview})"])
-        if download:
-            lines.append(f"[下载报告]({download})")
-        lines.append("")
-    return "\n".join(lines)[:4000]
+        return False, {"error": str(exc)}
 
 
 def send_to_wecom(items: List[Dict]) -> bool:
+    """每三篇研报合并为一张企业微信 Markdown 卡片推送。"""
     if not validate_config():
         return False
-    cos_enabled = bool(config.COS_SECRET_ID and config.COS_SECRET_KEY and config.COS_BUCKET)
-    if cos_enabled:
-        from output.generator import upload_report_links
-        for item in items:
-            output_path = str(item.get("_output_path", "") or "")
-            if not output_path or not os.path.isfile(output_path):
-                print(f"   ❌ COS 上传失败：报告文件不存在 {output_path}")
-                return False
-            try:
-                item["_preview_url"], item["_download_url"] = upload_report_links(output_path)
-            except Exception as exc:
-                print(f"   ❌ COS 上传失败: {exc}")
-                return False
-    else:
-        print("   ⚠️ COS 未配置，使用 REPORT_BASE_URL 链接")
-    content = _build_classic_content(items) if cos_enabled else _build_content(items, config.REPORT_BASE_URL)
-    success = send_markdown(content) if cos_enabled else send_markdown_v2(content)
-    if not success:
+    if not items:
+        print("   ℹ️ 没有入选研报，跳过企业微信推送")
+        return True
+
+    ready_items = []
+    for index, item in enumerate(items[:MAX_REPORTS_PER_PUSH], start=1):
+        if not item.get("_preview_url") or not item.get("_download_url"):
+            print(f"   ⚠️ 第 {index} 篇缺少 COS 链接，跳过")
+            continue
+        ready_items.append(item)
+
+    if not ready_items:
+        print("   ❌ 没有成功发送任何研报链接")
         return False
-    if cos_enabled:
-        time.sleep(4)
-        for item in items:
-            media_id, detail = upload_file(item["_output_path"])
-            if not media_id:
-                print(f"   ❌ 上传文件失败: {detail}")
-                return False
-            time.sleep(4)
-            if not send_file(media_id):
-                return False
-    print("   ✅ 推送成功")
+
+    batch_count = 0
+    offset = 0
+    while offset < len(ready_items):
+        batch = []
+        content = ""
+        for size in range(
+            min(REPORTS_PER_CARD, len(ready_items) - offset),
+            0,
+            -1,
+        ):
+            candidate_batch = ready_items[offset : offset + size]
+            try:
+                candidate_content = build_report_batch(offset + 1, candidate_batch)
+            except ValueError:
+                continue
+            batch = candidate_batch
+            content = candidate_content
+            break
+
+        if not batch:
+            print(
+                f"   ❌ 第 {offset + 1} 篇的双链接卡片超过企业微信消息大小限制"
+            )
+            return False
+
+        ok, detail = send_markdown(content)
+        if not ok:
+            print(f"   ❌ 第 {batch_count + 1} 组卡片发送失败：{detail}")
+            return False
+
+        batch_count += 1
+        print(
+            f"   ✅ 已推送第 {batch_count} 组，"
+            f"包含第 {offset + 1} 至 {offset + len(batch)} 篇研报"
+        )
+        offset += len(batch)
+        if offset < len(ready_items):
+            time.sleep(SEND_GAP_SECONDS)
+
+    print(
+        f"   ✅ 企业微信推送完成，共 {len(ready_items)} 篇研报、"
+        f"{batch_count} 张卡片"
+    )
     return True

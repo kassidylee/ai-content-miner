@@ -12,6 +12,8 @@ from uuid import uuid4
 import config
 from crawler.base import CrawlRunResult
 
+import time
+
 try:
     import requests
 except ImportError:  # pragma: no cover
@@ -69,8 +71,17 @@ class GithubBridge:
         self.lookback_days = float(getattr(config, "GITHUB_LOOKBACK_DAYS", 7))
         self.min_stars = int(getattr(config, "GITHUB_MIN_STARS", 0))
         self.timeout = float(getattr(config, "GITHUB_TIMEOUT_SECONDS", 30))
+        self.request_max_retries = int(
+            getattr(config, "GITHUB_REQUEST_MAX_RETRIES", 3)
+        )
         self.readme_max_chars = int(
             getattr(config, "GITHUB_README_MAX_CHARS", 6000)
+        )
+        self.code_evidence_max_chars = int(
+            getattr(config, "GITHUB_CODE_EVIDENCE_MAX_CHARS", 9000)
+        )
+        self.code_evidence_max_files = int(
+            getattr(config, "GITHUB_CODE_EVIDENCE_MAX_FILES", 3)
         )
         self.state_file = _resolve_project_path(
             getattr(
@@ -112,6 +123,10 @@ class GithubBridge:
             errors.append("GITHUB_TIMEOUT_SECONDS 必须大于 0")
         if self.readme_max_chars < 0:
             errors.append("GITHUB_README_MAX_CHARS 不能小于 0")
+        if self.code_evidence_max_chars < 0:
+            errors.append("GITHUB_CODE_EVIDENCE_MAX_CHARS 不能小于 0")
+        if self.code_evidence_max_files < 0:
+            errors.append("GITHUB_CODE_EVIDENCE_MAX_FILES 不能小于 0")
         if self.seen_id_limit <= 0:
             errors.append("GITHUB_SEEN_ID_LIMIT 必须是正整数")
         if requests is None:
@@ -189,6 +204,9 @@ class GithubBridge:
             rows = []
             for candidate in ordered:
                 candidate["readme"] = self._fetch_readme(candidate["full_name"])
+                code_evidence, evidence_manifest = self._fetch_code_evidence(candidate)
+                candidate["code_evidence"] = code_evidence
+                candidate["evidence_manifest"] = evidence_manifest
                 rows.append(self._to_row(candidate))
         except GithubApiError as exc:
             return CrawlRunResult(
@@ -288,6 +306,7 @@ class GithubBridge:
             "fork": bool(item.get("fork", False)),
             "matched_keywords": [keyword],
             "readme": "",
+            "default_branch": str(item.get("default_branch", "main") or "main"),
         }
 
     def _fetch_readme(self, full_name: str) -> str:
@@ -305,11 +324,81 @@ class GithubBridge:
             raise
         return response.text[: self.readme_max_chars]
 
+    def _fetch_code_evidence(
+        self, candidate: Dict[str, Any]
+    ) -> Tuple[str, List[str]]:
+        """Read a small, prioritized sample of repository source files."""
+        if self.code_evidence_max_chars == 0 or self.code_evidence_max_files == 0:
+            return "", []
+
+        full_name = candidate["full_name"]
+        branch = candidate.get("default_branch") or "main"
+        try:
+            response = self._request(
+                "GET",
+                f"{self.api_base_url}/repos/{full_name}/git/trees/{branch}",
+                params={"recursive": "1"},
+            )
+        except GithubApiError as exc:
+            # Empty repositories and stale default branches have no tree to read.
+            if exc.status_code in {404, 409}:
+                return "", []
+            raise
+        payload = response.json()
+        tree = payload.get("tree", []) if isinstance(payload, dict) else []
+        paths = [
+            str(node.get("path", ""))
+            for node in tree
+            if isinstance(node, dict)
+            and node.get("type") == "blob"
+            and str(node.get("path", "")).lower().endswith(
+                (".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".yaml", ".yml", ".json")
+            )
+        ]
+        ignored = ("node_modules/", ".git/", "dist/", "build/", "vendor/", "test", "spec")
+        paths = [path for path in paths if not path.lower().startswith(ignored)]
+
+        def priority(path: str) -> Tuple[int, int, str]:
+            name = path.rsplit("/", 1)[-1].lower()
+            preferred = {
+                "main.py": 0, "app.py": 1, "server.py": 2,
+                "main.ts": 3, "index.ts": 4, "index.js": 5,
+                "config.py": 6, "settings.py": 7,
+            }
+            return preferred.get(name, 20), path.count("/"), path
+
+        selected = sorted(paths, key=priority)[: self.code_evidence_max_files]
+        chunks: List[str] = []
+        manifest: List[str] = []
+        remaining = self.code_evidence_max_chars
+        for path in selected:
+            if remaining <= 0:
+                break
+            try:
+                file_response = self._request(
+                    "GET",
+                    f"{self.api_base_url}/repos/{full_name}/contents/{path}",
+                    params={"ref": branch},
+                    headers={"Accept": "application/vnd.github.raw+json"},
+                )
+                text = file_response.text[:remaining]
+            except GithubApiError as exc:
+                if exc.status_code == 404:
+                    continue
+                raise
+            if not text.strip():
+                continue
+            chunks.append(f"\n===== {path} =====\n{text}")
+            manifest.append(path)
+            remaining -= len(text)
+        return "".join(chunks), manifest
+
     def _to_row(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         description = candidate["description"]
         readme = candidate["readme"]
+        code_evidence = candidate.get("code_evidence", "")
         content = "\n\n".join(
-            part for part in (description, readme) if part
+            part for part in (description, readme, code_evidence) if part
         )
         return {
             "id": candidate["id"],
@@ -318,9 +407,10 @@ class GithubBridge:
             "content": content,
             "description": description,
             "readme": readme,
-            "source": "GitHub",
+            "code_evidence": code_evidence,
+            "evidence_manifest": candidate.get("evidence_manifest", []),
+                        "source": "GitHub",
             "url": candidate["html_url"],
-            "html_url": candidate["html_url"],
             "clone_url": candidate["clone_url"],
             "author": candidate["owner"],
             "owner": candidate["owner"],
@@ -349,14 +439,23 @@ class GithubBridge:
         headers = self._headers()
         headers.update(kwargs.pop("headers", {}))
         kwargs.setdefault("timeout", self.timeout)
-        try:
-            response = self._get_session().request(
-                method, url, headers=headers, **kwargs
-            )
-        except requests.RequestException as exc:
-            raise GithubApiError(
-                f"网络请求失败：{type(exc).__name__}: {exc}"
-            ) from exc
+        for attempt in range(1, self.request_max_retries + 1):
+            try:
+                response = self._get_session().request(
+                    method, url, headers=headers, **kwargs
+                )
+                break
+            except requests.RequestException as exc:
+                if attempt == self.request_max_retries:
+                    raise GithubApiError(
+                        f"网络请求失败：{type(exc).__name__}: {exc}"
+                    ) from exc
+                delay = attempt
+                print(
+                    f"   GitHub 请求中断（第 {attempt} 次）："
+                    f"{type(exc).__name__}；{delay} 秒后重试"
+                )
+                time.sleep(delay)
         if response.status_code in {403, 429}:
             retry_after = response.headers.get("Retry-After", "")
             detail = "GitHub API 限流"

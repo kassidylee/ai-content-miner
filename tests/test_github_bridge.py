@@ -51,6 +51,7 @@ def repository(repo_id, name, pushed_at, stars=10):
         "language": "Python",
         "topics": ["ai", "agent"],
         "license": {"spdx_id": "MIT"},
+        "default_branch": "main",
     }
 
 
@@ -96,6 +97,16 @@ class GithubBridgeTest(unittest.TestCase):
                 FakeResponse(payload={"items": [current, old, low_stars]}),
                 FakeResponse(payload={"items": [current]}),
                 FakeResponse(text="# Agent\nREADME content"),
+                FakeResponse(
+                    payload={
+                        "tree": [
+                            {"path": "main.py", "type": "blob"},
+                            {"path": "config.py", "type": "blob"},
+                        ]
+                    }
+                ),
+                FakeResponse(text="def main():\n    return 1\n"),
+                FakeResponse(text="SETTING = True\n"),
             ]
         )
 
@@ -114,6 +125,8 @@ class GithubBridgeTest(unittest.TestCase):
             self.assertEqual(rows[0]["id"], "github:1")
             self.assertEqual(rows[0]["matched_keywords"], ["AI Agent", "LLM"])
             self.assertIn("README content", rows[0]["content"])
+            self.assertIn("def main", rows[0]["code_evidence"])
+            self.assertEqual(rows[0]["evidence_manifest"], ["main.py", "config.py"])
             self.assertEqual(rows[0]["stars"], 20)
 
             search_call = session.calls[0]
@@ -169,6 +182,7 @@ class GithubBridgeTest(unittest.TestCase):
                 ),
                 FakeResponse(payload={"items": []}),
                 FakeResponse(status_code=404, text="not found"),
+                FakeResponse(payload={"tree": []}),
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:
