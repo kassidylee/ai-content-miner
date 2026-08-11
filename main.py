@@ -51,7 +51,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
 
     errors: List[str] = []
 
-    for module_name in ("openai", "requests"):
+    for module_name in ("openai", "requests", "qcloud_cos"):
         if importlib.util.find_spec(module_name) is None:
             errors.append(
                 f"缺少项目依赖 {module_name}；请先运行 "
@@ -74,25 +74,52 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     if not _is_http_url(webhook):
         errors.append("WECOM_WEBHOOK 必须是有效的 http/https URL")
     elif any(placeholder in webhook.lower() for placeholder in webhook_placeholders):
-        errors.append("WECOM_WEBHOOK 未配置或仍包含占位值")
+        errors.append("WECOM_WEBHOOK 未配置或仍是占位值")
 
-    report_base_url = str(getattr(config, "REPORT_BASE_URL", "")).strip()
-    if not _is_http_url(report_base_url):
+    cos_required = {
+        "COS_SECRET_ID": getattr(config, "COS_SECRET_ID", ""),
+        "COS_SECRET_KEY": getattr(config, "COS_SECRET_KEY", ""),
+        "COS_REGION": getattr(config, "COS_REGION", ""),
+        "COS_BUCKET": getattr(config, "COS_BUCKET", ""),
+    }
+    missing_cos = [
+        name for name, value in cos_required.items()
+        if not str(value or "").strip()
+    ]
+    if missing_cos:
+        errors.append(f"COS 配置缺失：{', '.join(missing_cos)}")
+
+    report_base_url = str(getattr(config, "REPORT_BASE_URL", "") or "").strip()
+    if report_base_url and not _is_http_url(report_base_url):
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
 
     if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
-        embedding_provider = str(getattr(config, "EMBEDDING_PROVIDER", "openai")).strip().lower()
+        embedding_provider = str(
+            getattr(config, "EMBEDDING_PROVIDER", "openai")
+        ).strip().lower()
         if embedding_provider not in {"openai", "dashscope"}:
             errors.append("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
         if not str(getattr(config, "EMBEDDING_API_KEY", "")).strip():
-            required = "DASHSCOPE_API_KEY" if embedding_provider == "dashscope" else "EMBEDDING_API_KEY"
+            required = (
+                "DASHSCOPE_API_KEY"
+                if embedding_provider == "dashscope"
+                else "EMBEDDING_API_KEY"
+            )
             errors.append(f"{required} 未配置")
-        if embedding_provider == "openai" and not _is_http_url(str(getattr(config, "EMBEDDING_BASE_URL", ""))):
+        if embedding_provider == "openai" and not _is_http_url(
+            str(getattr(config, "EMBEDDING_BASE_URL", ""))
+        ):
             errors.append("EMBEDDING_BASE_URL 必须是有效的 http/https URL")
-        if embedding_provider == "dashscope" and importlib.util.find_spec("dashscope") is None:
-            errors.append("缺少 dashscope；请先运行 python -m pip install -r requirements.txt")
+        if (
+            embedding_provider == "dashscope"
+            and importlib.util.find_spec("dashscope") is None
+        ):
+            errors.append(
+                "缺少 dashscope；请先运行 python -m pip install -r requirements.txt"
+            )
         if not str(getattr(config, "EMBEDDING_MODEL", "")).strip():
             errors.append("EMBEDDING_MODEL 不能为空")
+
     if getattr(bridge, "platform", "") == "github":
         from analyzer.github_embedding import (
             GithubEmbeddingError,
@@ -107,6 +134,7 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
             validate_github_quality_config()
         except (GithubEmbeddingError, ValueError) as exc:
             errors.append(str(exc))
+            
     score_threshold = getattr(config, "SCORE_THRESHOLD", None)
     if (
         not isinstance(score_threshold, (int, float))
@@ -119,28 +147,49 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     return errors
 
 
+
+
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
-    """仅对通过平台筛选且 0–10 综合分达标的文章生成输出。"""
+    """仅对最高分的合格内容生成报告，默认最多十篇。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
     print("\n📝 [5/6] 生成报告...")
-
     final_items: List[Dict] = []
     generated_count = 0
     score_threshold = float(getattr(config, "SCORE_THRESHOLD", 6.0))
+    max_reports = int(getattr(config, "REPORT_MAX_ITEMS", 10))
+    eligible_items = [
+        item for item in scored_items
+        if float(item.get("total_score", 0) or 0) >= score_threshold
+    ]
+    eligible_items.sort(
+        key=lambda item: float(item.get("total_score", 0) or 0),
+        reverse=True,
+    )
+    selected_items = (
+        eligible_items[:max_reports] if max_reports > 0 else eligible_items
+    )
+    skipped_by_limit = len(eligible_items) - len(selected_items)
+    if skipped_by_limit:
+        print(
+            f"   ℹ️ 按综合分仅生成前 {len(selected_items)} 篇，"
+            f"跳过 {skipped_by_limit} 篇"
+        )
 
-    for index, item in enumerate(scored_items, start=1):
+    for index, item in enumerate(selected_items, start=1):
         article = item.get("article", {})
         title = article.get("title", "无标题")[:25]
-        total_score = item.get("total_score", 0)
+        if not item.get("dimensions") or not item.get("scores"):
+            from analyzer.scorer import score_and_classify
 
-        if total_score < score_threshold:
-            print(
-                f"   ⏭️ 分数不足 [{index}/{len(scored_items)}] {title} "
-                f"→ {total_score:.2f} < {score_threshold:.2f}"
+            dimension_score = score_and_classify(article)
+            item.update(
+                {
+                    key: value for key, value in dimension_score.items()
+                    if key not in {"article", "total_score"}
+                }
             )
-            continue
 
         try:
             output_path = generate_output(item)
@@ -152,7 +201,7 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
             final_items.append(item)
             generated_count += 1
             print(
-                f"   ✅ [{index}/{len(scored_items)}] {title} → {output_path}"
+                f"   ✅ [{index}/{len(selected_items)}] {title} → {output_path}"
             )
         except Exception as exc:
             print(f"   ❌ 处理异常: {title} - {exc}")
@@ -161,6 +210,8 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
 
     print(f"   ✅ 生成完成，共 {generated_count} 篇报告")
     return final_items, generated_count
+
+
 
 def _print_retrieval_stats(articles: Sequence[Dict], passed_items: Sequence[Dict], final_items: Sequence[Dict]) -> None:
     """Print per-query production yield without changing scoring decisions."""
