@@ -14,11 +14,20 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 # 1. LLM API 配置
 # ============================================================
 
-API_KEY = os.environ.get("LLM_API_KEY", "").strip()
-BASE_URL = os.environ.get(
-    "LLM_BASE_URL", "https://api.openai.com/v1"
+# 优先使用项目既有的 LLM_* 名称，同时兼容负责人分支使用的 AI_* 名称。
+API_KEY = (
+    os.environ.get("LLM_API_KEY")
+    or os.environ.get("AI_API_KEY", "")
 ).strip()
-MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "").strip()
+BASE_URL = (
+    os.environ.get("LLM_BASE_URL")
+    or os.environ.get("AI_BASE_URL")
+    or "https://api.openai.com/v1"
+).strip()
+MODEL_NAME = (
+    os.environ.get("LLM_MODEL_NAME")
+    or os.environ.get("AI_MODEL_NAME", "")
+).strip()
 
 # ============================================================
 # 2. 评分与过滤阈值
@@ -52,9 +61,11 @@ BLOGGER_WHITELIST = {
 # 4. 内容采集配置
 # ============================================================
 
-# 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）
-# xhs、zhihu 使用 MediaCrawler；x 和 github 使用各自独立的采集器。
-CRAWL_PLATFORM = os.environ.get("CRAWL_PLATFORM", "github").strip().lower()
+# 支持平台：xhs（小红书）/ zhihu / x（X）/ github（公开仓库）/ reddit
+# xhs、zhihu 使用 MediaCrawler；其余平台使用各自独立的采集器。
+CRAWL_PLATFORM = os.environ.get(
+    "CRAWL_PLATFORM", "github"
+).strip().casefold()
 
 # Twitter 使用带技术意图的组合查询。
 SEARCH_KEYWORDS = [
@@ -108,18 +119,32 @@ ARTICLES_DIR = os.path.join(PROJECT_ROOT, "articles")
 # ============================================================
 
 # Embedding 可使用 OpenAI 兼容接口或阿里云 DashScope 原生 API。
-EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "openai").strip().lower()
+EMBEDDING_PROVIDER = os.environ.get(
+    "EMBEDDING_PROVIDER", "openai"
+).strip().casefold()
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-EMBEDDING_API_KEY = os.environ.get(
-    "EMBEDDING_API_KEY",
-    DASHSCOPE_API_KEY if EMBEDDING_PROVIDER == "dashscope" else "",
+_GENERIC_EMBEDDING_API_KEY = os.environ.get(
+    "EMBEDDING_API_KEY", ""
 ).strip()
-EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+# 原生模式优先读取专用变量；旧环境仍可回退到 EMBEDDING_API_KEY。
+EMBEDDING_API_KEY = (
+    (DASHSCOPE_API_KEY or _GENERIC_EMBEDDING_API_KEY)
+    if EMBEDDING_PROVIDER == "dashscope"
+    else _GENERIC_EMBEDDING_API_KEY
+)
+EMBEDDING_BASE_URL = os.environ.get(
+    "EMBEDDING_BASE_URL", "https://api.openai.com/v1"
+).strip()
 EMBEDDING_MODEL = os.environ.get(
     "EMBEDDING_MODEL",
-    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
+    (
+        "text-embedding-v3"
+        if EMBEDDING_PROVIDER == "dashscope"
+        else "text-embedding-3-small"
+    ),
 ).strip()
-EMBEDDING_BATCH_SIZE = 50
+# text-embedding-v4 的同步接口单次最多接收 10 条文本。
+EMBEDDING_BATCH_SIZE = 10
 EMBEDDING_TIMEOUT_SECONDS = 60
 EMBEDDING_MAX_RETRIES = 2
 
@@ -175,7 +200,7 @@ GITHUB_EMBEDDING_BASE_URL = os.environ.get(
 GITHUB_EMBEDDING_MODEL = os.environ.get(
     "GITHUB_EMBEDDING_MODEL", EMBEDDING_MODEL
 )
-GITHUB_EMBEDDING_BATCH_SIZE = 20
+GITHUB_EMBEDDING_BATCH_SIZE = 10
 GITHUB_EMBEDDING_MAX_CHARS = 6000
 GITHUB_EMBEDDING_TIMEOUT_SECONDS = 60
 GITHUB_EMBEDDING_MAX_RETRIES = 2
@@ -225,16 +250,30 @@ TWSCRAPE_SEEN_ID_LIMIT = 5000
 # ============================================================
 
 # RSS 不提供帖子分数、点赞比例、评论数或 flair。采集器读取明确社区的
-# new/.rss，再在本地按 SEARCH_KEYWORDS、时间窗口和帖子 ID 过滤。
+# new/.rss，在采集阶段只执行时间窗口、格式校验和帖子 ID 去重。
+# 关键词命中只作为审计字段记录，不用于前置淘汰。
 REDDIT_RSS_SUBREDDITS = ["LocalLLaMA"]
-REDDIT_RSS_RESULTS_PER_SUBREDDIT = 10
+REDDIT_RSS_KEYWORDS = [
+    "LLM",
+    "model",
+    "agent",
+    "inference",
+    "quantization",
+    "大模型",
+    "推理",
+    "量化",
+]
+# Reddit RSS 的 limit 参数最高请求 100；服务端实际返回数量可能更少。
+REDDIT_RSS_RESULTS_PER_SUBREDDIT = 100
+# 0 表示不在进入专用 pipeline 前设置跨社区总量上限。
+REDDIT_RSS_MAX_CANDIDATES = 0
 REDDIT_RSS_LOOKBACK_HOURS = 168
 REDDIT_RSS_REQUEST_TIMEOUT_SECONDS = 30
 
 # 2026-07-24 的真实响应显示当前出口约 30 秒恢复一次 RSS 请求额度。
 # 多社区之间默认等待 31 秒；建议先只配置一个社区。
 REDDIT_RSS_REQUEST_INTERVAL_SECONDS = 31
-REDDIT_RSS_MAX_RESPONSE_BYTES = 2_000_000
+REDDIT_RSS_MAX_RESPONSE_BYTES = 5_000_000
 REDDIT_RSS_BASE_URL = "https://www.reddit.com"
 REDDIT_RSS_USER_AGENT = os.environ.get(
     "REDDIT_RSS_USER_AGENT",
@@ -248,6 +287,96 @@ REDDIT_RSS_STATE_FILE = os.path.join(
 )
 REDDIT_RSS_SEEN_ID_LIMIT = 5000
 
+# Reddit 专用筛选：内容与来源规则 -> 主题 Embedding -> 内容质量评分。
+# RSS 缺少互动字段，因此质量分不读取 score、评论数或点赞比例。
+REDDIT_RULE_FILTER = {
+    "min_content_chars": 40,
+    "exclude_keywords": [],
+}
+REDDIT_EMBEDDING_API_KEY = os.environ.get(
+    "REDDIT_EMBEDDING_API_KEY", EMBEDDING_API_KEY
+)
+REDDIT_EMBEDDING_BASE_URL = os.environ.get(
+    "REDDIT_EMBEDDING_BASE_URL", EMBEDDING_BASE_URL
+)
+REDDIT_EMBEDDING_MODEL = os.environ.get(
+    "REDDIT_EMBEDDING_MODEL", EMBEDDING_MODEL
+)
+# DashScope text-embedding-v4 的同步接口单批最多接收 10 条文本。
+# Reddit 会一次处理完整 RSS 候选集，因此必须在这里分批，而不是减少采集量。
+REDDIT_EMBEDDING_BATCH_SIZE = min(EMBEDDING_BATCH_SIZE, 10)
+REDDIT_EMBEDDING_MAX_CHARS = 6000
+REDDIT_EMBEDDING_FILTER_MODE = "enforce"  # shadow | enforce
+REDDIT_INTEREST_TOPICS = [
+    {
+        "id": "ai-agent",
+        "label": "AI Agent",
+        "description": (
+            "AI Agent、智能体框架、工具调用、任务规划、"
+            "多智能体协作、Agent 工作流和相关开源项目"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "reasoning-model",
+        "label": "推理模型",
+        "description": (
+            "大语言模型的复杂推理、思维链、test-time compute、"
+            "数学推理、代码推理和推理模型训练"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "model-systems",
+        "label": "模型系统",
+        "description": (
+            "大模型训练、推理服务、模型部署、量化、微调、"
+            "GPU 优化、分布式系统和 AI 基础设施"
+        ),
+        "threshold": 0.35,
+    },
+    {
+        "id": "open-models",
+        "label": "开放模型",
+        "description": (
+            "开放权重大语言模型、模型发布、基准测试、"
+            "模型能力对比、复现实验和开源实现"
+        ),
+        "threshold": 0.35,
+    },
+]
+REDDIT_QUALITY_WEIGHTS = {
+    "relevance": 0.35,
+    "depth": 0.25,
+    "evidence": 0.20,
+    "freshness": 0.10,
+    "source_quality": 0.10,
+}
+REDDIT_QUALITY_MIN_SCORE = 6.0
+# 三层筛选后按 Reddit 质量分降序保留的最终候选数量。
+REDDIT_FINAL_RESULT_LIMIT = 20
+
+# Reddit 专用社交信息流输出。通过筛选的帖子只生成极简标题/摘要，
+# 不进入逐条长研报生成器；全部筛选审计写入结构化 JSONL。
+REDDIT_TITLE_MAX_CHARS = 80
+REDDIT_ABSTRACT_MAX_CHARS = 180
+REDDIT_ENRICHMENT_INPUT_MAX_CHARS = 3000
+REDDIT_ENRICHMENT_TEMPERATURE = 0.1
+REDDIT_ENRICHMENT_MAX_TOKENS = 300
+REDDIT_ENRICHMENT_TIMEOUT_SECONDS = 30
+REDDIT_ENRICHMENT_MAX_RETRIES = 1
+REDDIT_PROCESSED_FILE = os.path.join(
+    DATA_DIR, "processed", "reddit.jsonl"
+)
+REDDIT_REPORT_FILE = os.path.join(PROJECT_ROOT, "reports", "reddit.html")
+REDDIT_FEED_RETENTION_DAYS = 30
+REDDIT_FEED_MAX_ITEMS = 200
+REDDIT_WECOM_MAX_ITEMS = 5
+REDDIT_WECOM_MAX_BYTES = 4096
+REDDIT_ENABLE_WECOM = os.environ.get(
+    "REDDIT_ENABLE_WECOM", "true"
+).strip().casefold() in {"1", "true", "yes", "on"}
+
 # ============================================================
 # 4.4 Twitter 专用结构化处理
 # ============================================================
@@ -260,9 +389,9 @@ TWITTER_RULE_FILTER = {
     "allow_quotes": True,
     "drop_sensitive": True,
     "min_meaningful_chars": 40,
-    # 浏览量或社交互动满足任一门槛即可通过质量检查。
-    "min_view_count": 50,
-    "min_social_engagement": 2,
+    # 浏览量只代表曝光，不代表认可，因此不再允许帖子仅凭浏览量通过。
+    # 加权互动门槛负责排除完全无人响应的内容；一手技术链接可作为冷启动例外。
+    "min_weighted_engagement": 2.0,
     # 不信任 X 搜索结果的宽松匹配，正文必须再次命中至少一个主题词。
     "required_topic_keywords": [
         "AI Agent",
@@ -411,19 +540,37 @@ TWITTER_RULE_FILTER = {
         "内部通知",
         "掌舵",
     ],
-    "promotion_penalty_keywords": [
+    # 这些词通常直接表达课程售卖、订阅或获客意图。命中后立即淘汰，
+    # 不允许广告依靠高相关度、发布时间或主题配额重新进入每日精选。
+    "promotion_hard_drop_keywords": [
         "course",
         "webinar",
+        "bootcamp",
+        "masterclass",
+        "enroll",
+        "newsletter",
+        "subscribe",
+        "gumroad",
+        "课程",
+        "开源课",
+        "公开课",
+        "训练营",
+        "报名",
+        "订阅",
+        "亲授",
+        "付费社群",
+        "知识星球",
+        "免费领取",
+    ],
+    # 软推广信号也可能出现在正常技术分享中，因此只扣分，不直接淘汰。
+    "promotion_penalty_keywords": [
         "conference",
         "event",
         "hackathon",
-        "newsletter",
-        "subscribe",
         "top 10",
         "list of",
         "recommended",
         "follow",
-        "课程",
         "直播",
         "论坛",
         "大会",
@@ -458,17 +605,31 @@ TWITTER_RULE_FILTER = {
     ],
 }
 
-# Twitter 默认只运行本地筛选；仅在 API 服务商提供 Embedding 模型时再启用。
-TWITTER_EMBEDDING_ENABLED = False
+# 互动指标使用统一权重，规则门槛和每日排序共用同一套定义。
+# 转发最能体现信息传播，引用和收藏通常比单次点赞包含更强的认可或复用意图。
+TWITTER_ENGAGEMENT_WEIGHTS = {
+    "like_count": 1.0,
+    "reply_count": 1.5,
+    "share_count": 3.0,
+    "quote_count": 2.5,
+    "bookmark_count": 2.0,
+}
+
+# 默认关闭，部署时通过 .env 显式启用，避免缺少凭证时阻塞 Twitter 主流程。
+TWITTER_EMBEDDING_ENABLED = os.environ.get(
+    "TWITTER_EMBEDDING_ENABLED", "false"
+).strip().casefold() in {"1", "true", "yes", "on"}
 TWITTER_EMBEDDING_MODEL = os.environ.get(
     "TWITTER_EMBEDDING_MODEL",
-    "text-embedding-3-small",
+    EMBEDDING_MODEL,
 ).strip()
-TWITTER_EMBEDDING_BATCH_SIZE = 50
-TWITTER_EMBEDDING_MAX_CHARS = 6000
+TWITTER_EMBEDDING_BATCH_SIZE = 10
+TWITTER_EMBEDDING_MAX_CHARS = 3500
 
-# shadow 只记录低分项；enforce 会删除未达到最高相似主题阈值的内容。
-TWITTER_EMBEDDING_FILTER_MODE = "shadow"
+# enforce 会实际删除低相似度内容；shadow 仅记录判定，不改变保留结果。
+TWITTER_EMBEDDING_FILTER_MODE = os.environ.get(
+    "TWITTER_EMBEDDING_FILTER_MODE", "shadow"
+).strip()
 
 TWITTER_INTEREST_TOPICS = [
     {
@@ -542,6 +703,26 @@ TWITTER_COMMENT_FILTER = {
     ],
     "ignored_username_suffixes": ["bot"],
 }
+
+# 每日选择只限制发布数量，不截断进入内容筛选的候选。
+TWITTER_DAILY_PRIMARY_LIMIT = 8
+TWITTER_DAILY_MORE_LIMIT = 4
+TWITTER_DAILY_AUTHOR_LIMIT = 1
+# 主题不设硬配额，只在重排时小幅扣分。这样互动质量仍决定主要顺序，
+# 同时避免十二条内容全部集中在一个主题。
+TWITTER_DAILY_TOPIC_REPEAT_PENALTY = 3.0
+TWITTER_DAILY_HISTORY_DAYS = 7
+TWITTER_DAILY_EVENT_TOKEN_OVERLAP = 0.4
+TWITTER_DAILY_TIMEZONE = "Asia/Hong_Kong"
+
+# 48 小时以内的内容正常竞争。48 至 168 小时的内容只有在互动进入
+# 高分段且带有 GitHub、arXiv 等一手证据时才作为高质量例外保留。
+TWITTER_DAILY_STANDARD_MAX_AGE_HOURS = 48
+TWITTER_DAILY_FALLBACK_MAX_AGE_HOURS = 168
+TWITTER_DAILY_FALLBACK_MIN_SOCIAL_SCORE = 0.85
+# 规则层允许带一手链接的冷启动内容继续评估，但最终发布仍需达到
+# 绝对互动底线，避免候选不足时用零互动内容填满 8+4。
+TWITTER_DAILY_MIN_WEIGHTED_ENGAGEMENT = 5.0
 
 TWITTER_TITLE_MAX_CHARS = 48
 TWITTER_ABSTRACT_MAX_CHARS = 180
@@ -694,12 +875,7 @@ init_directories()
 # ============================================================
 
 # 该模型只供小红书、知乎等旧四层筛选使用，Twitter 使用上方独立开关和模型。
-# 如果 API 服务商不支持默认模型，请在 .env 中填写其实际 Embedding 模型 ID。
-EMBEDDING_MODEL = os.environ.get(
-    "EMBEDDING_MODEL",
-    "text-embedding-v3" if EMBEDDING_PROVIDER == "dashscope" else "text-embedding-3-small",
-).strip()
-EMBEDDING_BATCH_SIZE = 50
+# 模型、Key 和 Base URL 已在文件顶部统一从 .env 读取。
 EMBEDDING_MAX_CHARS = 6000
 # shadow 只记录低相似度结果；enforce 会直接淘汰低于阈值的内容。
 EMBEDDING_FILTER_MODE = "shadow"
