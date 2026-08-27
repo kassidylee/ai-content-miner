@@ -302,9 +302,34 @@ REDDIT_RSS_MAX_CANDIDATES = 0
 REDDIT_FINAL_RESULT_LIMIT = 20
 ```
 
-2026-07-24 当前开发机真实测试中，RSS 返回 HTTP 200，但响应额度约 30 秒才恢复一次。
-默认只配置一个社区；多社区运行会根据响应头在请求之间等待，避免连续请求触发 429。
-详见 [`docs/reddit-rss-collection.md`](docs/reddit-rss-collection.md)。
+### 可选：测试 Reddit JSON 采集
+
+Reddit 不经过 MediaCrawler，也不使用官方 Data API。采集器逐个读取
+`REDDIT_SUBREDDITS` 中明确社区的 `new.json`，再在本地按关键词和最近 168 小时
+过滤。当前不使用 `r/all`、全站搜索、RSS、登录 Cookie 或代理轮换。
+
+只测试一个社区的 JSON 请求、字段转换和下游解析：
+
+```bash
+.venv/bin/python scripts/smoke_test_reddit.py "LLM" \
+  --subreddit LocalLLaMA --limit 3
+```
+
+烟雾测试成功后，将平台改为：
+
+```python
+CRAWL_PLATFORM = "reddit"
+```
+
+并按需调整明确的社区列表：
+
+```python
+REDDIT_SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial"]
+```
+
+匿名 JSON 没有长期兼容性承诺，可能因本机网络环境或限流返回 `403`、`429`。
+采集器会明确报错；遇到 `429` 时会显示 `Retry-After` 并停止本次运行，不会通过
+Cookie、代理或 IP 轮换规避限制。
 
 ### 6. 运行完整工作流
 
@@ -315,7 +340,7 @@ python3 main.py
 
 `--check-config` 只检查必填配置和当前采集器。小红书、知乎会检查 MediaCrawler 路径、
 commit 和运行解释器；X 会检查 twscrape 版本、本地会话数据库和已处理状态；Reddit
-会检查社区列表、RSS 请求参数、User-Agent、专用筛选配置、Embedding 凭证和已处理状态，
+会检查社区列表、请求参数、User-Agent 和已处理状态，
 不会启动爬虫、调用模型或发送企业微信消息。配置、爬虫退出码、当次无数据或推送
 失败时，主程序均返回非零退出状态。
 
@@ -710,5 +735,4 @@ MediaCrawler 使用独立的
 - [MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)：社交媒体爬虫。
 - [twscrape](https://github.com/vladkens/twscrape)：X 非公开 GraphQL 接口的 Python 封装。
 - [Reddit](https://www.reddit.com/)：Atom/RSS 内容来源。
-- lingzao-skill：灵造分析能力参考。
 - [OpenAI](https://openai.com/)：提供 LLM 能力支持。
