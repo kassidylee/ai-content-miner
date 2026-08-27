@@ -101,7 +101,41 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(article["likes"], 19)
         self.assertEqual(article["publish_time"].utcoffset().total_seconds(), 0)
 
-    def test_loads_reddit_json_fields_without_treating_score_as_likes(self):
+    def test_loads_github_repository_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_file = Path(temp_dir) / "search_repositories_2026-07-24.jsonl"
+            self.write_jsonl(
+                data_file,
+                [{
+                    "id": "github:1",
+                    "full_name": "example/agent",
+                    "description": "Agent framework",
+                    "source": "GitHub",
+                    "html_url": "https://github.com/example/agent",
+                    "owner": {"login": "example"},
+                    "stargazers_count": 120,
+                    "forks_count": 15,
+                    "watchers_count": 20,
+                    "open_issues_count": 3,
+                    "pushed_at": "2026-07-23T08:30:00Z",
+                }],
+            )
+            with patch("utils.parser.config.CRAWL_LIMIT", 20):
+                articles = load_articles(
+                    [data_file], platform="github", allow_manual_fallback=False
+                )
+
+        article = articles[0]
+        self.assertEqual(article["title"], "example/agent")
+        self.assertEqual(article["source"], "GitHub")
+        self.assertEqual(article["url"], "https://github.com/example/agent")
+        self.assertEqual(article["author"], "example")
+        self.assertEqual(article["likes"], 120)
+        self.assertEqual(article["collects"], 15)
+        self.assertEqual(article["shares"], 20)
+        self.assertEqual(article["comments"], 3)
+
+    def test_loads_reddit_rss_fields_without_inventing_metrics(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_file = Path(temp_dir) / "search_contents_2026-07-24.jsonl"
             self.write_jsonl(
@@ -109,16 +143,17 @@ class ParserTest(unittest.TestCase):
                 [{
                     "id": "abc123",
                     "title": "Reddit 标题",
-                    "content": "Reddit 正文",
+                    "content": "Reddit RSS 正文",
                     "source": "Reddit",
                     "url": "https://www.reddit.com/r/test/comments/abc123/example/",
                     "author": "alice",
                     "publish_time": "2026-07-24T08:30:00+00:00",
                     "subreddit": "test",
-                    "score": 123,
-                    "upvote_ratio": 0.95,
-                    "comment_count": 7,
-                    "collection_method": "reddit_json",
+                    "score": None,
+                    "upvote_ratio": None,
+                    "comment_count": None,
+                    "metrics_available": False,
+                    "collection_method": "reddit_rss",
                 }],
             )
             with patch("utils.parser.config.CRAWL_LIMIT", 20):
@@ -131,13 +166,12 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(len(articles), 1)
         article = articles[0]
         self.assertEqual(article["source"], "Reddit")
-        self.assertEqual(article["content"], "Reddit 正文")
+        self.assertEqual(article["content"], "Reddit RSS 正文")
         self.assertEqual(article["author"], "alice")
         self.assertEqual(article["likes"], 0)
-        self.assertEqual(article["comments"], 7)
-        self.assertEqual(article["raw"]["score"], 123)
-        self.assertEqual(article["raw"]["upvote_ratio"], 0.95)
-
+        self.assertEqual(article["comments"], 0)
+        self.assertIsNone(article["raw"]["score"])
+        self.assertFalse(article["raw"]["metrics_available"])
     def test_ignores_comment_files_and_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

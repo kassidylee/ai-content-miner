@@ -62,14 +62,19 @@ class TwitterParserTest(unittest.TestCase):
             root = Path(temp_dir)
             content_file = root / "search_contents_2026-07-22.jsonl"
             comment_file = root / "search_comments_2026-07-22.jsonl"
-            row = {
+            first = {
                 "id": "1",
                 "content": "content",
                 "url": "https://x.com/alice/status/1",
                 "publish_time": "2026-07-22T08:30:00+00:00",
             }
+            second = {
+                **first,
+                "id": "2",
+                "url": "https://x.com/alice/status/2",
+            }
             content_file.write_text(
-                json.dumps(row) + "\n",
+                json.dumps(first) + "\n" + json.dumps(second) + "\n",
                 encoding="utf-8",
             )
             comment_file.write_text(
@@ -78,13 +83,16 @@ class TwitterParserTest(unittest.TestCase):
             )
             with patch(
                 "utils.twitter_parser.config.CRAWL_LIMIT",
-                20,
+                1,
             ):
                 items = load_twitter_items(
                     [content_file, comment_file]
                 )
 
-        self.assertEqual([item["id"] for item in items], ["x:1"])
+        self.assertEqual(
+            [item["id"] for item in items],
+            ["x:1", "x:2"],
+        )
 
 
 if __name__ == "__main__":

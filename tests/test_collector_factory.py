@@ -2,8 +2,9 @@ import unittest
 from unittest.mock import patch
 
 from crawler.factory import build_collector
+from crawler.github_bridge import GithubBridge
 from crawler.mediacrawler_bridge import MediaCrawlerBridge
-from crawler.reddit_bridge import RedditBridge
+from crawler.reddit_rss_bridge import RedditRssBridge
 from crawler.twscrape_bridge import TwscrapeBridge
 
 
@@ -14,17 +15,23 @@ class CollectorFactoryTest(unittest.TestCase):
 
         self.assertIsInstance(collector, TwscrapeBridge)
 
+    def test_github_uses_rest_bridge(self):
+        with patch("crawler.factory.config.CRAWL_PLATFORM", "github"):
+            collector = build_collector()
+
+        self.assertIsInstance(collector, GithubBridge)
+
     def test_xhs_keeps_using_mediacrawler(self):
         with patch("crawler.factory.config.CRAWL_PLATFORM", "xhs"):
             collector = build_collector()
 
         self.assertIsInstance(collector, MediaCrawlerBridge)
 
-    def test_reddit_uses_json_collector(self):
+    def test_reddit_uses_rss_collector(self):
         with patch("crawler.factory.config.CRAWL_PLATFORM", "reddit"):
             collector = build_collector()
 
-        self.assertIsInstance(collector, RedditBridge)
+        self.assertIsInstance(collector, RedditRssBridge)
 
 
 if __name__ == "__main__":

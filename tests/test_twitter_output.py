@@ -5,9 +5,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from output.twitter_feed import render_twitter_feed
+from output.twitter_feed import (
+    TwitterFeedRenderError,
+    render_twitter_feed,
+)
 from utils.twitter_result_store import (
     append_twitter_results,
+    load_recent_twitter_digest_items,
     load_twitter_feed_items,
 )
 
@@ -118,6 +122,58 @@ class TwitterOutputTest(unittest.TestCase):
         self.assertIn('href="https://x.com/user/status/1"', page)
         self.assertNotIn("javascript:alert(1)", page)
         self.assertIn('rel="noopener noreferrer"', page)
+
+    def test_daily_html_groups_primary_and_more_items(self):
+        primary = [make_item(f"x:{index}") for index in range(1, 3)]
+        more = [make_item("x:3")]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "reports" / "x.html"
+            with patch(
+                "output.twitter_feed.config.TWITTER_REPORT_FILE",
+                str(output),
+            ):
+                render_twitter_feed(
+                    primary_items=primary,
+                    more_items=more,
+                    digest_date="2026-07-29",
+                )
+                page = output.read_text(encoding="utf-8")
+
+        self.assertIn("Twitter 每日精选", page)
+        self.assertIn("2026-07-29 · 主推 2 条", page)
+        self.assertIn("更多值得关注（1）", page)
+        self.assertNotIn("查看原帖", page)
+
+    def test_daily_html_rejects_more_than_configured_limits(self):
+        items = [make_item(f"x:{index}") for index in range(1, 10)]
+        with self.assertRaises(TwitterFeedRenderError):
+            render_twitter_feed(primary_items=items, more_items=[])
+
+    def test_recent_digest_history_only_returns_published_items(self):
+        primary = make_item("x:1")
+        primary["publication_metadata"] = {
+            "decision": "primary",
+            "digest_date": "2026-07-23",
+        }
+        archived = make_item("x:2")
+        archived["publication_metadata"] = {
+            "decision": "archive",
+            "digest_date": "2026-07-24",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            processed_file = Path(temp_dir) / "processed" / "x.jsonl"
+            with patch(
+                "utils.twitter_result_store.config."
+                "TWITTER_PROCESSED_FILE",
+                str(processed_file),
+            ):
+                append_twitter_results([primary, archived])
+                history = load_recent_twitter_digest_items(
+                    now=NOW,
+                    days=7,
+                )
+
+        self.assertEqual([item["id"] for item in history], ["x:1"])
 
 
 if __name__ == "__main__":

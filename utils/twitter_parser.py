@@ -128,5 +128,4 @@ def load_twitter_items(data_files: Iterable[Path]) -> List[Dict]:
         except OSError as exc:
             raise ValueError(f"无法读取 Twitter 数据文件：{path}") from exc
 
-    limit = int(getattr(config, "CRAWL_LIMIT", 0) or 0)
-    return items[:limit] if limit > 0 else items
+    return items

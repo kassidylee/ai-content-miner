@@ -94,7 +94,6 @@ class TwscrapeBridgeTest(unittest.TestCase):
         bridge.state_file = root / "state" / "seen.json"
         bridge.target_data_dir = root / "data"
         bridge.keywords = ["AI", "LLM"]
-        bridge.limit = 3
         bridge.per_query_limit = 3
         bridge.lookback_hours = 168
         bridge.validate = lambda: []
@@ -181,8 +180,8 @@ class TwscrapeBridgeTest(unittest.TestCase):
             self.assertEqual(
                 api.calls,
                 [
-                    ("AI", 3, {"product": "Latest"}),
-                    ("LLM", 3, {"product": "Latest"}),
+                    ("AI", 3, {"product": "Top"}),
+                    ("LLM", 3, {"product": "Top"}),
                 ],
             )
             self.assertEqual(api.factory_kwargs["pool"], str(bridge.db_file))
@@ -201,6 +200,37 @@ class TwscrapeBridgeTest(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("search broke", result.error)
+
+    def test_collection_does_not_apply_global_crawl_limit(self):
+        api = FakeAPI(
+            {
+                "AI": [
+                    make_tweet("1", "one", 10),
+                    make_tweet("2", "two", 9),
+                    make_tweet("3", "three", 8),
+                ],
+                "LLM": [
+                    make_tweet("4", "four", 7),
+                    make_tweet("5", "five", 6),
+                    make_tweet("6", "six", 5),
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            __import__("config"),
+            "CRAWL_LIMIT",
+            1,
+        ):
+            bridge = self.make_bridge(temp_dir, api)
+            result = bridge.run()
+            rows = [
+                json.loads(line)
+                for line in result.data_files[0].read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+
+        self.assertEqual(len(rows), 6)
 
     def test_seen_ids_are_skipped_and_not_changed_by_collection_only(self):
         api = FakeAPI(

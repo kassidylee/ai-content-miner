@@ -86,7 +86,6 @@ class TwscrapeBridge:
         self.platform = "x"
         self.configured_platform = str(config.CRAWL_PLATFORM).strip().lower()
         self.keywords = [str(keyword).strip() for keyword in config.SEARCH_KEYWORDS]
-        self.limit = getattr(config, "CRAWL_LIMIT", 20)
         self.per_query_limit = getattr(config, "TWSCRAPE_RESULTS_PER_QUERY", 20)
         self.product = str(getattr(config, "TWSCRAPE_SEARCH_PRODUCT", "Latest"))
         self.timeout = getattr(config, "TWSCRAPE_TIMEOUT_SECONDS", 120)
@@ -121,8 +120,6 @@ class TwscrapeBridge:
                 "twscrape 0.19.2 需要 Python >=3.10；"
                 f"当前为 {sys.version_info.major}.{sys.version_info.minor}"
             )
-        if not isinstance(self.limit, int) or self.limit <= 0:
-            errors.append("CRAWL_LIMIT 必须是正整数")
         if not isinstance(self.per_query_limit, int) or self.per_query_limit <= 0:
             errors.append("TWSCRAPE_RESULTS_PER_QUERY 必须是正整数")
         if self.product not in SUPPORTED_PRODUCTS:
@@ -423,7 +420,7 @@ class TwscrapeBridge:
                 collected[tweet_id] = (sort_time, row)
 
         ordered = sorted(collected.values(), key=lambda item: item[0], reverse=True)
-        return [row for _, row in ordered[: self.limit]]
+        return [row for _, row in ordered]
 
     async def _search_keyword(
         self, api: object, keyword: str

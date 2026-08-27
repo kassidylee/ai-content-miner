@@ -1,7 +1,7 @@
 """AI Content Miner 工作流主入口。
 
-职责仅限程序编排：配置检查 → 本次爬取 → 本次数据加载 → 分析/过滤/评分
-→ 可选溯源 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
+职责仅限程序编排：配置检查 → 按平台路由 → 本次爬取 → 数据加载
+→ 平台筛选 → 输出 → 企业微信推送。各业务实现仍由已有模块负责。
 """
 
 from __future__ import annotations
@@ -18,7 +18,10 @@ import config
 from crawler.base import CollectorBridge, CrawlRunResult
 from crawler.factory import build_collector
 from utils.parser import load_articles
-
+from analyzer.filter import (
+    multi_stage_filter,
+    recent_keyword_filter,
+)
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1
@@ -27,6 +30,7 @@ EXIT_CRAWLER = 3
 EXIT_NO_DATA = 4
 EXIT_NOTIFY = 5
 EXIT_STATE = 6
+EXIT_EMBEDDING = 7
 
 
 def _is_http_url(value: str) -> bool:
@@ -40,10 +44,14 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         from workflows.twitter import validate_twitter_runtime_config
 
         return validate_twitter_runtime_config(bridge)
+    if getattr(bridge, "platform", "") == "reddit":
+        from workflows.reddit import validate_reddit_runtime_config
+
+        return validate_reddit_runtime_config(bridge)
 
     errors: List[str] = []
 
-    for module_name in ("openai", "requests"):
+    for module_name in ("openai", "requests", "qcloud_cos"):
         if importlib.util.find_spec(module_name) is None:
             errors.append(
                 f"缺少项目依赖 {module_name}；请先运行 "
@@ -66,117 +74,134 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
     if not _is_http_url(webhook):
         errors.append("WECOM_WEBHOOK 必须是有效的 http/https URL")
     elif any(placeholder in webhook.lower() for placeholder in webhook_placeholders):
-        errors.append("WECOM_WEBHOOK 未配置或仍包含占位值")
+        errors.append("WECOM_WEBHOOK 未配置或仍是占位值")
 
-    report_base_url = str(getattr(config, "REPORT_BASE_URL", "")).strip()
-    if not _is_http_url(report_base_url):
+    cos_required = {
+        "COS_SECRET_ID": getattr(config, "COS_SECRET_ID", ""),
+        "COS_SECRET_KEY": getattr(config, "COS_SECRET_KEY", ""),
+        "COS_REGION": getattr(config, "COS_REGION", ""),
+        "COS_BUCKET": getattr(config, "COS_BUCKET", ""),
+    }
+    missing_cos = [
+        name for name, value in cos_required.items()
+        if not str(value or "").strip()
+    ]
+    if missing_cos:
+        errors.append(f"COS 配置缺失：{', '.join(missing_cos)}")
+
+    report_base_url = str(getattr(config, "REPORT_BASE_URL", "") or "").strip()
+    if report_base_url and not _is_http_url(report_base_url):
         errors.append("REPORT_BASE_URL 必须是有效的 http/https URL")
+
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        embedding_provider = str(
+            getattr(config, "EMBEDDING_PROVIDER", "openai")
+        ).strip().lower()
+        if embedding_provider not in {"openai", "dashscope"}:
+            errors.append("EMBEDDING_PROVIDER 只能是 openai 或 dashscope")
+        if not str(getattr(config, "EMBEDDING_API_KEY", "")).strip():
+            required = (
+                "DASHSCOPE_API_KEY"
+                if embedding_provider == "dashscope"
+                else "EMBEDDING_API_KEY"
+            )
+            errors.append(f"{required} 未配置")
+        if embedding_provider == "openai" and not _is_http_url(
+            str(getattr(config, "EMBEDDING_BASE_URL", ""))
+        ):
+            errors.append("EMBEDDING_BASE_URL 必须是有效的 http/https URL")
+        if (
+            embedding_provider == "dashscope"
+            and importlib.util.find_spec("dashscope") is None
+        ):
+            errors.append(
+                "缺少 dashscope；请先运行 python -m pip install -r requirements.txt"
+            )
+        if not str(getattr(config, "EMBEDDING_MODEL", "")).strip():
+            errors.append("EMBEDDING_MODEL 不能为空")
+
+    if getattr(bridge, "platform", "") == "github":
+        from analyzer.github_embedding import (
+            GithubEmbeddingError,
+            validate_github_embedding_config,
+        )
+        from analyzer.github_quality import validate_github_quality_config
+        from analyzer.github_rules import validate_github_rule_config
+
+        try:
+            validate_github_rule_config()
+            validate_github_embedding_config()
+            validate_github_quality_config()
+        except (GithubEmbeddingError, ValueError) as exc:
+            errors.append(str(exc))
+            
+    score_threshold = getattr(config, "SCORE_THRESHOLD", None)
+    if (
+        not isinstance(score_threshold, (int, float))
+        or isinstance(score_threshold, bool)
+        or not 0 <= score_threshold <= 10
+    ):
+        errors.append("SCORE_THRESHOLD 必须是 0 到 10 之间的数字")
 
     errors.extend(bridge.validate())
     return errors
 
 
-def analyze_articles(articles: List[Dict]) -> None:
-    """按配置执行 lingzao 分析；禁用时不做空调用。"""
-    if not getattr(config, "ENABLE_LINGZAO_ANALYSIS", False):
-        print("\n🧠 [3/6] lingzao 分析已禁用，明确跳过")
-        return
-
-    from analyzer.lingzao_adapter import LingzaoAnalyzer
-
-    print("\n🧠 [3/6] lingzao-skill 内容分析...")
-    lingzao = LingzaoAnalyzer()
-    for index, article in enumerate(articles, start=1):
-        try:
-            article["lingzao_analysis"] = lingzao.analyze(article)
-            if index % 10 == 0:
-                print(f"   📊 进度: {index}/{len(articles)}")
-        except Exception as exc:
-            title = article.get("title", "无标题")[:20]
-            print(f"   ⚠️ 分析失败: {title} - {exc}")
-            article["lingzao_analysis"] = {"error": str(exc)}
-        time.sleep(0.5)
-    print("   ✅ 分析完成")
-
-
-def score_articles(articles: List[Dict]) -> Tuple[List[Dict], int]:
-    from analyzer.filter import get_blogger_weight, rule_filter
-    from analyzer.scorer import score_and_classify
-
-    print("\n📊 [4/6] 规则过滤 + AI 评分...")
-    scored_items: List[Dict] = []
-    filtered_count = 0
-
-    for index, article in enumerate(articles, start=1):
-        passed, reason = rule_filter(article)
-        title = article.get("title", "无标题")[:25]
-        if not passed:
-            filtered_count += 1
-            print(f"   ⏭️ 跳过 [{index}/{len(articles)}] {title} → {reason}")
-            continue
-
-        weight = get_blogger_weight(article)
-        try:
-            result = score_and_classify(article)
-            result["blogger_weight"] = weight
-            result["total_score"] = min(
-                10.0, result.get("total_score", 0) * weight
-            )
-            result["lingzao"] = article.get("lingzao_analysis", {})
-            scored_items.append(result)
-            print(
-                f"   📊 [{index}/{len(articles)}] {title} "
-                f"→ {result['total_score']:.1f} 分"
-            )
-        except Exception as exc:
-            print(f"   ❌ 评分失败: {title} - {exc}")
-
-        time.sleep(config.REQUEST_INTERVAL)
-
-    scored_items.sort(key=lambda item: item.get("total_score", 0), reverse=True)
-    print(
-        f"   ✅ 评分完成：通过 {len(scored_items)} 篇，过滤 {filtered_count} 篇"
-    )
-    return scored_items, filtered_count
 
 
 def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
+    """仅对最高分的合格内容生成报告，默认最多十篇。"""
     from output.generator import generate_output
     from utils.raditer import log_decision
 
-    retrieval_enabled = getattr(config, "ENABLE_RETRIEVAL", False)
-    if retrieval_enabled:
-        from analyzer.ral import ral_pipeline
-
-        print("\n📝 [5/6] RAL 来源识别 + 生成报告...")
-    else:
-        ral_pipeline = None
-        print("\n📝 [5/6] RAL 来源识别已禁用；仅生成报告...")
-
+    print("\n📝 [5/6] 生成报告...")
     final_items: List[Dict] = []
     generated_count = 0
+    score_threshold = float(getattr(config, "SCORE_THRESHOLD", 6.0))
+    max_reports = int(getattr(config, "REPORT_MAX_ITEMS", 10))
+    eligible_items = [
+        item for item in scored_items
+        if float(item.get("total_score", 0) or 0) >= score_threshold
+    ]
+    eligible_items.sort(
+        key=lambda item: float(item.get("total_score", 0) or 0),
+        reverse=True,
+    )
+    selected_items = (
+        eligible_items[:max_reports] if max_reports > 0 else eligible_items
+    )
+    skipped_by_limit = len(eligible_items) - len(selected_items)
+    if skipped_by_limit:
+        print(
+            f"   ℹ️ 按综合分仅生成前 {len(selected_items)} 篇，"
+            f"跳过 {skipped_by_limit} 篇"
+        )
 
-    for index, item in enumerate(scored_items, start=1):
+    for index, item in enumerate(selected_items, start=1):
         article = item.get("article", {})
         title = article.get("title", "无标题")[:25]
-        if item["total_score"] < config.SCORE_THRESHOLD:
-            print(
-                f"   ⏭️ 分数不足 [{index}/{len(scored_items)}] {title} "
-                f"→ {item['total_score']:.1f} < {config.SCORE_THRESHOLD}"
+        if not item.get("dimensions") or not item.get("scores"):
+            from analyzer.scorer import score_and_classify
+
+            dimension_score = score_and_classify(article)
+            item.update(
+                {
+                    key: value for key, value in dimension_score.items()
+                    if key not in {"article", "total_score"}
+                }
             )
-            continue
 
         try:
-            enriched = ral_pipeline(item) if ral_pipeline else item
-            output_path = generate_output(enriched)
+            output_path = generate_output(item)
             if not output_path:
                 print(f"   ❌ 未生成输出: {title}")
                 continue
-            log_decision(enriched, output_path)
-            final_items.append(enriched)
+
+            log_decision(item, output_path)
+            final_items.append(item)
             generated_count += 1
             print(
-                f"   ✅ [{index}/{len(scored_items)}] {title} → {output_path}"
+                f"   ✅ [{index}/{len(selected_items)}] {title} → {output_path}"
             )
         except Exception as exc:
             print(f"   ❌ 处理异常: {title} - {exc}")
@@ -187,12 +212,99 @@ def generate_reports(scored_items: List[Dict]) -> Tuple[List[Dict], int]:
     return final_items, generated_count
 
 
+
+def _print_retrieval_stats(articles: Sequence[Dict], passed_items: Sequence[Dict], final_items: Sequence[Dict]) -> None:
+    """Print per-query production yield without changing scoring decisions."""
+    passed_ids = {id(item.get("article", {})) for item in passed_items}
+    report_ids = {id(item.get("article", {})) for item in final_items}
+    stats: Dict[str, Dict[str, int]] = {}
+    for article in articles:
+        for match in article.get("_retrieval_matches", []):
+            key = f"{match['intent_group']} / {match['query']}"
+            bucket = stats.setdefault(key, {"collected": 0, "passed": 0, "reports": 0})
+            bucket["collected"] += 1
+            article_id = id(article)
+            if article_id in passed_ids:
+                bucket["passed"] += 1
+            if article_id in report_ids:
+                bucket["reports"] += 1
+    if not stats:
+        return
+    print("   📈 检索产出统计（按意图组 / 查询）：")
+    for key, bucket in sorted(stats.items(), key=lambda item: (-item[1]["reports"], item[0])):
+        print(
+            f"      {key}: 采集 {bucket['collected']}，"
+            f"评分通过 {bucket['passed']}，研报 {bucket['reports']}"
+        )
+
+def _run_github_filters(articles: Sequence[Dict]) -> Tuple[List[Dict], int]:
+    """运行 GitHub 专用筛选，并转换为已有报告生成器输入。"""
+    from analyzer.github_pipeline import run_github_filters
+
+    filtered = run_github_filters(articles)
+    passed_items: List[Dict] = []
+    for index, article in enumerate(filtered["passed"], start=1):
+        metadata = article.get("github_filter_metadata", {})
+        stages = metadata.get("stages", []) if isinstance(metadata, dict) else []
+        quality = next(
+            (
+                stage for stage in reversed(stages)
+                if isinstance(stage, dict) and stage.get("stage") == "quality"
+            ),
+            {},
+        )
+        total_score = float(quality.get("score", 0.0) or 0.0)
+        components = quality.get("components", {})
+        passed_items.append(
+            {
+                "article": article,
+                "total_score": total_score,
+                "filter_result": metadata,
+                "blogger_weight": 1.0,
+                "dimensions": [
+                    "相关度", "文档质量", "社区热度", "活跃度", "项目元数据"
+                ],
+                "scores": [
+                    float(components.get("relevance", 0.0)),
+                    float(components.get("documentation", 0.0)),
+                    float(components.get("community", 0.0)),
+                    float(components.get("activity", 0.0)),
+                    float(components.get("metadata", 0.0)),
+                ],
+                "summary": (
+                    str(article.get("raw", {}).get("description", "") or "")
+                    or "GitHub 开源仓库"
+                )[:180],
+                "category": "GitHub 开源项目",
+            }
+        )
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ✅ 通过 [{index}/{len(filtered['passed'])}] {title} "
+            f"→ GitHub 质量分 {total_score:.2f}"
+        )
+
+    for index, article in enumerate(filtered["dropped"], start=1):
+        metadata = article.get("github_filter_metadata", {})
+        reasons = metadata.get("final_reason_codes", []) if isinstance(metadata, dict) else []
+        title = article.get("title", "无标题")[:25]
+        print(
+            f"   ⏭️ 淘汰 [{index}/{len(filtered['dropped'])}] {title} "
+            f"→ {', '.join(reasons) or 'GITHUB_FILTER_DROPPED'}"
+        )
+    return passed_items, len(filtered["dropped"])
+
+
 def run_workflow(bridge: CollectorBridge) -> int:
     """运行已通过配置检查的完整工作流，并返回进程退出码。"""
     if getattr(bridge, "platform", "") == "x":
         from workflows.twitter import run_twitter_workflow
 
         return run_twitter_workflow(bridge)
+    if getattr(bridge, "platform", "") == "reddit":
+        from workflows.reddit import run_reddit_workflow
+
+        return run_reddit_workflow(bridge)
 
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
@@ -212,14 +324,83 @@ def run_workflow(bridge: CollectorBridge) -> int:
         return EXIT_NO_DATA
     print(f"   ✅ 加载 {len(articles)} 篇文章")
 
-    analyze_articles(articles)
-    scored_items, filtered_count = score_articles(articles)
-    final_items, generated_count = generate_reports(scored_items)
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        articles, recent_stats = recent_keyword_filter(articles)
+        print(
+            "   🗓️ 三日关键词筛选："
+            f"保留 {recent_stats['kept']} 篇，"
+            f"时间淘汰 {recent_stats['dropped_old']} 篇，"
+            f"无时间 {recent_stats['dropped_missing_time']} 篇，"
+            f"无关键词 {recent_stats['dropped_unrelated']} 篇"
+        )
+        if recent_stats["truncated"]:
+            print(
+                "   ⚠️ 相关内容超过上限，"
+                f"另截断 {recent_stats['truncated']} 篇"
+            )
+        if not articles:
+            print("   ❌ 最近三天没有命中关键词的内容，流程终止")
+            return EXIT_NO_DATA
+    if getattr(bridge, "platform", "") == "github":
+        print("\n🧠 [3/6] 执行 GitHub 筛选（仓库规则 → 关键词 Embedding → 质量评分）...")
+        try:
+            passed_items, filtered_count = _run_github_filters(articles)
+        except Exception as exc:
+            from analyzer.github_embedding import GithubEmbeddingError
+
+            if isinstance(exc, GithubEmbeddingError):
+                print(f"   ❌ GitHub Embedding 筛选失败: {exc}")
+                return EXIT_EMBEDDING
+            print(f"   ❌ GitHub 筛选失败: {type(exc).__name__}: {exc}")
+            return EXIT_UNEXPECTED
+    else:
+        print("\n🧠 [3/6] 执行四层筛选（规则 → 语义去重 → 评论区 → 博主画像）...")
+        passed_items = []
+        filtered_count = 0
+        for idx, article in enumerate(articles, start=1):
+            result = multi_stage_filter(
+                article,
+                existing_articles=None,
+                enable_semantic=True,
+                enable_comment=True,
+                enable_author_profile=True,
+            )
+            title = article.get("title", "无标题")[:25]
+            if not result.passed:
+                filtered_count += 1
+                print(
+                    f"   ⏭️ 淘汰 [{idx}/{len(articles)}] {title} → "
+                    f"{result.rule_reason or result.semantic_reason or result.comment_reason or result.author_reason}"
+                )
+                continue
+            passed_items.append(
+                {
+                    "article": article,
+                    "total_score": result.total_score(),
+                    "filter_result": result.to_dict(),
+                    "blogger_weight": 1.0,
+                }
+            )
+            print(
+                f"   ✅ 通过 [{idx}/{len(articles)}] {title} "
+                f"→ 综合得分 {result.total_score():.2f}"
+            )
+
+    print(f"   ✅ 筛选完成：通过 {len(passed_items)} 篇，淘汰 {filtered_count} 篇")
+    # ----- 后续：RAL（禁用） + 生成报告 + 推送 -----
+    if hasattr(config, "ENABLE_RETRIEVAL"):
+        original_retrieval = config.ENABLE_RETRIEVAL
+        config.ENABLE_RETRIEVAL = False   # 临时禁用
+    else:
+        original_retrieval = False
+
+    final_items, generated_count = generate_reports(passed_items)
+    if getattr(bridge, "platform", "") in {"xhs", "zhihu"}:
+        _print_retrieval_stats(articles, passed_items, final_items)
 
     print("\n📤 [6/6] 推送企业微信...")
     if final_items:
         from notifier.wecom import send_to_wecom
-
         if not send_to_wecom(final_items):
             print("   ❌ 推送失败")
             return EXIT_NOTIFY
@@ -235,8 +416,8 @@ def run_workflow(bridge: CollectorBridge) -> int:
     print("🎉 工作流执行完毕！")
     print("📊 统计：")
     print(f"   - 读取文章: {len(articles)} 篇")
-    print(f"   - 通过过滤: {len(scored_items)} 篇")
-    print(f"   - 规则过滤: {filtered_count} 篇")
+    print(f"   - 通过筛选: {len(passed_items)} 篇")
+    print(f"   - 平台筛选淘汰: {filtered_count} 篇")
     print(f"   - 生成报告: {generated_count} 篇")
     print(f"   - 推送报告: {len(final_items)} 篇")
     print("=" * 70)
