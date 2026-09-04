@@ -8,6 +8,7 @@ from crawler.github_bridge import GithubBridge
 from crawler.mediacrawler_bridge import MediaCrawlerBridge
 from crawler.reddit_rss_bridge import RedditRssBridge
 from crawler.twscrape_bridge import TwscrapeBridge
+from crawler.youtube_bridge import YoutubeBridge
 
 
 def build_collector() -> CollectorBridge:
@@ -19,4 +20,6 @@ def build_collector() -> CollectorBridge:
         return GithubBridge()
     if platform == "reddit":
         return RedditRssBridge()
+    if platform in {"youtube", "yt", "ytb"}:
+        return YoutubeBridge()
     return MediaCrawlerBridge()

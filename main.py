@@ -48,6 +48,10 @@ def validate_runtime_config(bridge: CollectorBridge) -> List[str]:
         from workflows.reddit import validate_reddit_runtime_config
 
         return validate_reddit_runtime_config(bridge)
+    if getattr(bridge, "platform", "") == "youtube":
+        from workflows.youtube import validate_youtube_runtime_config
+
+        return validate_youtube_runtime_config(bridge)
 
     errors: List[str] = []
 
@@ -305,6 +309,10 @@ def run_workflow(bridge: CollectorBridge) -> int:
         from workflows.reddit import run_reddit_workflow
 
         return run_reddit_workflow(bridge)
+    if getattr(bridge, "platform", "") == "youtube":
+        from workflows.youtube import run_youtube_workflow
+
+        return run_youtube_workflow(bridge)
 
     print("\n📡 [1/6] 启动数据采集...")
     crawl_result: CrawlRunResult = bridge.run()
