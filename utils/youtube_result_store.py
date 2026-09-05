@@ -24,7 +24,7 @@ def _json_default(value: object) -> str:
 
 
 def append_youtube_results(items: Iterable[Dict]) -> Path:
-    """Atomically append unique YouTube records for this run."""
+    """Atomically upsert unique YouTube records for this run by unified ID."""
     destination = Path(config.YOUTUBE_PROCESSED_FILE)
     unique: Dict[str, Dict] = {}
     for item in items:
@@ -35,16 +35,51 @@ def append_youtube_results(items: Iterable[Dict]) -> Path:
             )
         unique[item_id] = copy.deepcopy(item)
 
+    records: List[Dict] = []
+    positions: Dict[str, int] = {}
+    if destination.exists():
+        try:
+            with destination.open("r", encoding="utf-8") as input_file:
+                for line_number, line in enumerate(input_file, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        existing = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise YoutubeResultStoreError(
+                            f"{destination} line {line_number} is not valid JSON"
+                        ) from exc
+                    if not isinstance(existing, dict):
+                        raise YoutubeResultStoreError(
+                            f"{destination} line {line_number} is not a JSON object"
+                        )
+                    existing_id = str(existing.get("id", "") or "").strip()
+                    if not existing_id:
+                        raise YoutubeResultStoreError(
+                            f"{destination} line {line_number} is missing unified ID"
+                        )
+                    if existing_id in positions:
+                        records[positions[existing_id]] = existing
+                    else:
+                        positions[existing_id] = len(records)
+                        records.append(existing)
+        except OSError as exc:
+            raise YoutubeResultStoreError(
+                f"YouTube structured result read failed: {exc}"
+            ) from exc
+
+    for item_id, record in unique.items():
+        if item_id in positions:
+            records[positions[item_id]] = record
+        else:
+            positions[item_id] = len(records)
+            records.append(record)
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
     try:
         with temporary.open("wb") as output:
-            if destination.exists():
-                existing = destination.read_bytes()
-                output.write(existing)
-                if existing and not existing.endswith(b"\n"):
-                    output.write(b"\n")
-            for record in unique.values():
+            for record in records:
                 output.write(
                     json.dumps(
                         record,
