@@ -800,6 +800,26 @@ TWITTER_FEED_DEBUG_METADATA = False
 TWITTER_ENABLE_WECOM = False
 
 # ============================================================
+# 4.5 YouTube / YTB_LLM structured feed
+# ============================================================
+
+# YouTube is produced by the sibling YTB_LLM project. ai-content-miner treats
+# that project as a black-box producer and maps its digest JSON into the
+# structured social feed schema used by Reddit/Twitter.
+YOUTUBE_YTB_LLM_PATH = os.environ.get(
+    "YOUTUBE_YTB_LLM_PATH",
+    os.path.abspath(os.path.join(PROJECT_ROOT, "..", "YTB_LLM")),
+).strip()
+YOUTUBE_PYTHON = os.environ.get(
+    "YOUTUBE_PYTHON",
+    "/opt/anaconda3/bin/python3",
+).strip()
+YOUTUBE_PROCESSED_FILE = os.path.join(DATA_DIR, "processed", "youtube.jsonl")
+YOUTUBE_REPORT_FILE = os.path.join(PROJECT_ROOT, "reports", "youtube.html")
+YOUTUBE_FEED_RETENTION_DAYS = 30
+YOUTUBE_FEED_MAX_ITEMS = 200
+
+# ============================================================
 # 5. 企业微信推送配置
 # ============================================================
 

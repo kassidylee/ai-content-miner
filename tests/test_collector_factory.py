@@ -6,6 +6,7 @@ from crawler.github_bridge import GithubBridge
 from crawler.mediacrawler_bridge import MediaCrawlerBridge
 from crawler.reddit_rss_bridge import RedditRssBridge
 from crawler.twscrape_bridge import TwscrapeBridge
+from crawler.youtube_bridge import YoutubeBridge
 
 
 class CollectorFactoryTest(unittest.TestCase):
@@ -32,6 +33,12 @@ class CollectorFactoryTest(unittest.TestCase):
             collector = build_collector()
 
         self.assertIsInstance(collector, RedditRssBridge)
+
+    def test_youtube_uses_ytb_llm_bridge(self):
+        with patch("crawler.factory.config.CRAWL_PLATFORM", "youtube"):
+            collector = build_collector()
+
+        self.assertIsInstance(collector, YoutubeBridge)
 
 
 if __name__ == "__main__":
