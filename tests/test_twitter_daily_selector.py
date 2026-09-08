@@ -108,8 +108,7 @@ class TwitterDailySelectorTest(unittest.TestCase):
     def daily_limits(self):
         return patch.multiple(
             "analyzer.twitter_daily_selector.config",
-            TWITTER_DAILY_PRIMARY_LIMIT=8,
-            TWITTER_DAILY_MORE_LIMIT=4,
+            TWITTER_DAILY_LIMIT=8,
             TWITTER_DAILY_AUTHOR_LIMIT=1,
             TWITTER_DAILY_TOPIC_REPEAT_PENALTY=3.0,
             TWITTER_DAILY_HISTORY_DAYS=7,
@@ -121,29 +120,20 @@ class TwitterDailySelectorTest(unittest.TestCase):
             TWITTER_DAILY_MIN_WEIGHTED_ENGAGEMENT=5.0,
         )
 
-    def test_selects_at_most_eight_primary_and_four_more(self):
+    def test_selects_at_most_eight_items(self):
         items = [make_item(index) for index in range(1, 16)]
 
         with self.daily_limits():
             result = select_twitter_daily_items(items, now=NOW)
 
-        self.assertEqual(len(result["primary"]), 8)
-        self.assertEqual(len(result["more"]), 4)
-        self.assertEqual(len(result["selected"]), 12)
-        self.assertEqual(len(result["archived"]), 3)
+        self.assertEqual(len(result["selected"]), 8)
+        self.assertEqual(len(result["archived"]), 7)
         self.assertEqual(
             {
                 item["publication_metadata"]["decision"]
-                for item in result["primary"]
+                for item in result["selected"]
             },
-            {"primary"},
-        )
-        self.assertEqual(
-            {
-                item["publication_metadata"]["decision"]
-                for item in result["more"]
-            },
-            {"more"},
+            {"selected"},
         )
 
     def test_clusters_different_posts_about_the_same_event(self):
@@ -195,10 +185,10 @@ class TwitterDailySelectorTest(unittest.TestCase):
                 now=NOW,
             )
 
-        self.assertEqual(len(result["selected"]), 12)
+        self.assertEqual(len(result["selected"]), 8)
         self.assertEqual(len(result["comment_dropped"]), 1)
         self.assertEqual(provider.calls[0], "x:14")
-        self.assertEqual(len(provider.calls), 13)
+        self.assertEqual(len(provider.calls), 9)
 
     def test_archives_event_seen_in_recent_digest(self):
         current = make_item(
@@ -212,7 +202,7 @@ class TwitterDailySelectorTest(unittest.TestCase):
             content="OpenMinis mobile agent source code",
         )
         history["publication_metadata"] = {
-            "decision": "primary",
+            "decision": "selected",
             "digest_date": "2026-07-28",
         }
 
@@ -361,7 +351,7 @@ class TwitterDailySelectorTest(unittest.TestCase):
             ["TWITTER_DAILY_LOW_SOCIAL_SIGNAL"],
         )
 
-    def test_four_topic_catalog_can_fill_eight_plus_four_capacity(self):
+    def test_four_topic_catalog_can_fill_daily_capacity(self):
         topics = ["ai-agent", "reasoning-model", "multimodal", "ai-infra"]
         items = [make_item(index) for index in range(1, 13)]
         for index, item in enumerate(items):
@@ -371,8 +361,7 @@ class TwitterDailySelectorTest(unittest.TestCase):
         with self.daily_limits():
             result = select_twitter_daily_items(items, now=NOW)
 
-        self.assertEqual(len(result["primary"]), 8)
-        self.assertEqual(len(result["more"]), 4)
+        self.assertEqual(len(result["selected"]), 8)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""为每日 Twitter 简报聚类、排序并选择 8+4 条内容。"""
+"""为每日 Twitter 简报聚类、排序并选择最多八条内容。"""
 
 from __future__ import annotations
 
@@ -134,8 +134,7 @@ _NOVELTY_KEYWORDS = {
 def validate_twitter_daily_config() -> None:
     """校验每日配额和聚类配置。"""
     for name in (
-        "TWITTER_DAILY_PRIMARY_LIMIT",
-        "TWITTER_DAILY_MORE_LIMIT",
+        "TWITTER_DAILY_LIMIT",
         "TWITTER_DAILY_AUTHOR_LIMIT",
         "TWITTER_DAILY_HISTORY_DAYS",
         "TWITTER_DAILY_STANDARD_MAX_AGE_HOURS",
@@ -771,9 +770,7 @@ def select_twitter_daily_items(
     for _score, item in representatives:
         item["publication_metadata"]["base_rank"] = base_ranks[id(item)]
 
-    primary_limit = int(config.TWITTER_DAILY_PRIMARY_LIMIT)
-    more_limit = int(config.TWITTER_DAILY_MORE_LIMIT)
-    total_limit = primary_limit + more_limit
+    daily_limit = int(config.TWITTER_DAILY_LIMIT)
     author_limit = int(config.TWITTER_DAILY_AUTHOR_LIMIT)
     topic_penalty = float(config.TWITTER_DAILY_TOPIC_REPEAT_PENALTY)
     author_counts: Dict[str, int] = {}
@@ -782,9 +779,9 @@ def select_twitter_daily_items(
     comment_dropped: List[Dict] = []
     remaining = list(representatives)
 
-    # 每轮都根据已经选择的主题重新计算排序分。重复主题只扣分，
-    # 不会像旧逻辑那样在每类两条后停止，因此主题结构不会限制 8+4 容量。
-    while remaining and len(selected) < total_limit:
+    # 每轮都根据已经选择的主题重新计算排序分。重复主题只扣分，不设置
+    # 硬主题配额，因此内容质量仍是主要排序依据，主题结构也不会提前耗尽容量。
+    while remaining and len(selected) < daily_limit:
         options: List[Tuple[float, float, Dict, str, str]] = []
         still_eligible: List[Tuple[float, Dict]] = []
         for base_score, item in remaining:
@@ -852,12 +849,11 @@ def select_twitter_daily_items(
             continue
 
         previous = item["publication_metadata"]
-        decision = "primary" if len(selected) < primary_limit else "more"
         item_id = str(item.get("id", "") or "")
         _set_publication(
             item,
             digest_date,
-            decision,
+            "selected",
             "TWITTER_DAILY_SELECTED",
             **_score_audit(scores[item_id]),
             rank=len(selected) + 1,
@@ -871,8 +867,6 @@ def select_twitter_daily_items(
         author_counts[author] = author_counts.get(author, 0) + 1
         topic_counts[topic] = topic_counts.get(topic, 0) + 1
 
-    primary = selected[:primary_limit]
-    more = selected[primary_limit:total_limit]
     selected_ids = {id(item) for item in selected}
     dropped_ids = {id(item) for item in comment_dropped}
     archived = [
@@ -882,8 +876,6 @@ def select_twitter_daily_items(
     ]
     return {
         "digest_date": digest_date,
-        "primary": primary,
-        "more": more,
         "selected": selected,
         "archived": archived,
         "comment_dropped": comment_dropped,

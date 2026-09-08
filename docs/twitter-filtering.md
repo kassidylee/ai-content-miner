@@ -17,7 +17,7 @@ Twitter 工作流。
 7. 是否与本次其他内容重复。
 
 通过本地规则和可选 Embedding 后，系统先对全部合格候选做事件聚类和排序，再按
-排名惰性检查回复区，直到选出最多 8 条主推和 4 条补充。
+排名惰性检查回复区，直到选出最多 8 条每日精选。
 
 ```text
 X Top 搜索
@@ -26,7 +26,7 @@ X Top 搜索
   → 第二层：Embedding（默认关闭）
   → 同事件聚类、内容排序和多样性约束
   → 按排名惰性检查回复区并补位
-  → 最多 8 条主推和 4 条补充
+  → 最多 8 条每日精选
   → 仅为入选内容生成 LLM 标题、摘要和标签
   → data/processed/x.jsonl
   → reports/x.html
@@ -76,7 +76,7 @@ TWSCRAPE_LOOKBACK_HOURS = 168
 - 已经确认处理过的帖子 ID 会由 twscrape 状态文件排除。
 
 Twitter 不读取通用的 `CRAWL_LIMIT`。候选不会因为发布时间排在全局第 100 条之后
-而被截断，发布数量由后面的每日 8+4 选择器控制。
+而被截断，发布数量由后面的每日选择器控制。
 
 ## 3. 第一层：本地确定性规则
 
@@ -389,7 +389,7 @@ TWITTER_EMBEDDING_DISABLED
 ```
 
 回复检查在每日候选完成聚类和排序后惰性执行。系统从最高排名开始检查，遇到被强烈
-质疑的内容就继续检查下一条补位，直到选满 8+4 或候选耗尽。
+质疑的内容就继续检查下一条补位，直到选满 8 条或候选耗尽。
 
 处理原则：
 
@@ -409,7 +409,7 @@ TWITTER_REPLIES_PASSED
 TWITTER_REPLIES_STRONG_CHALLENGE
 ```
 
-## 9. 每日 8+4 选择
+## 9. 每日精选选择
 
 每日选择器位于 `analyzer/twitter_daily_selector.py`，负责：
 
@@ -421,13 +421,14 @@ TWITTER_REPLIES_STRONG_CHALLENGE
 - 最近 7 天已发布的同事件默认不再推送；
 - 同一作者每天最多 1 条；
 - 同一主题没有硬配额，每多选择一条只在重排时扣 3 分；
-- 前 8 条标记为 `primary`，后 4 条标记为 `more`；
+- 最多 8 条标记为 `selected`；
 - 其余合格内容标记为 `archive` 或 `cluster_duplicate`。
 
-8+4 是发布上限，不是填充目标。候选不足时不会降低质量标准凑满 12 条。
+8 条是发布上限，不是填充目标。候选不足时不会降低质量标准凑满配额。HTML 与
+企业微信消费同一份 `selected` 列表，因此两端不会出现不同的内容层级或数量。
 
 互动质量是最终顺序的主导因素。主题只做轻量软重排，因此不会再出现四个主题乘以
-每类两条、导致补充区永远为空的问题。
+每类两条、导致每日容量无法用满的问题。
 
 常见每日选择原因码：
 
@@ -509,7 +510,7 @@ data/processed/x.jsonl
   },
   "publication_metadata": {
     "digest_date": "2026-07-29",
-    "decision": "primary",
+    "decision": "selected",
     "score": 83.5,
     "rank": 1,
     "base_rank": 1,
@@ -527,7 +528,7 @@ data/processed/x.jsonl
 }
 ```
 
-HTML 只展示当天最多 8 条主推和 4 条补充：
+HTML 与企业微信都只展示当天同一批最多 8 条精选：
 
 ```text
 reports/x.html
@@ -606,7 +607,7 @@ reports/x.html
 | `analyzer/twitter_engagement.py` | 规则层和排序层共用的加权互动计算 |
 | `analyzer/twitter_embedding.py` | 第二层 Embedding 实现，当前未启用 |
 | `analyzer/twitter_comments.py` | 第三层回复区筛选 |
-| `analyzer/twitter_daily_selector.py` | 每日聚类、排序、回复补位和 8+4 选择 |
+| `analyzer/twitter_daily_selector.py` | 每日聚类、排序、回复补位和最多 8 条选择 |
 | `analyzer/twitter_pipeline.py` | 三层顺序编排 |
 | `analyzer/twitter_enricher.py` | 筛选后的标题、摘要和标签 |
 | `utils/twitter_result_store.py` | JSONL 审计记录 |

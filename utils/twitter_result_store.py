@@ -142,9 +142,12 @@ def load_recent_twitter_digest_items(
         selected_at = _datetime(
             item.get("processed_at") or item.get("published_at")
         )
+        # 新版本使用单一 selected 决策；primary 和 more 仅用于兼容已经
+        # 写入历史 JSONL 的旧记录，保证升级后七日事件去重仍然连续。
         if (
             not isinstance(publication, dict)
-            or publication.get("decision") not in {"primary", "more"}
+            or publication.get("decision")
+            not in {"selected", "primary", "more"}
             or publication.get("digest_date") == digest_date
             or selected_at is None
             or selected_at < cutoff

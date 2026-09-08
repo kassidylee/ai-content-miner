@@ -123,9 +123,8 @@ class TwitterOutputTest(unittest.TestCase):
         self.assertNotIn("javascript:alert(1)", page)
         self.assertIn('rel="noopener noreferrer"', page)
 
-    def test_daily_html_groups_primary_and_more_items(self):
-        primary = [make_item(f"x:{index}") for index in range(1, 3)]
-        more = [make_item("x:3")]
+    def test_daily_html_renders_one_selected_list(self):
+        items = [make_item(f"x:{index}") for index in range(1, 4)]
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "reports" / "x.html"
             with patch(
@@ -133,27 +132,31 @@ class TwitterOutputTest(unittest.TestCase):
                 str(output),
             ):
                 render_twitter_feed(
-                    primary_items=primary,
-                    more_items=more,
+                    items=items,
                     digest_date="2026-07-29",
                 )
                 page = output.read_text(encoding="utf-8")
 
         self.assertIn("Twitter 每日精选", page)
-        self.assertIn("2026-07-29 · 主推 2 条", page)
-        self.assertIn("更多值得关注（1）", page)
+        self.assertIn("2026-07-29 · 精选 3 条", page)
+        self.assertNotIn("更多值得关注", page)
         self.assertNotIn("查看原帖", page)
 
-    def test_daily_html_rejects_more_than_configured_limits(self):
+    def test_daily_html_rejects_more_than_configured_limit(self):
         items = [make_item(f"x:{index}") for index in range(1, 10)]
         with self.assertRaises(TwitterFeedRenderError):
-            render_twitter_feed(primary_items=items, more_items=[])
+            render_twitter_feed(items=items)
 
     def test_recent_digest_history_only_returns_published_items(self):
-        primary = make_item("x:1")
-        primary["publication_metadata"] = {
-            "decision": "primary",
+        selected = make_item("x:1")
+        selected["publication_metadata"] = {
+            "decision": "selected",
             "digest_date": "2026-07-23",
+        }
+        legacy_primary = make_item("x:3")
+        legacy_primary["publication_metadata"] = {
+            "decision": "primary",
+            "digest_date": "2026-07-22",
         }
         archived = make_item("x:2")
         archived["publication_metadata"] = {
@@ -167,13 +170,18 @@ class TwitterOutputTest(unittest.TestCase):
                 "TWITTER_PROCESSED_FILE",
                 str(processed_file),
             ):
-                append_twitter_results([primary, archived])
+                append_twitter_results(
+                    [selected, legacy_primary, archived]
+                )
                 history = load_recent_twitter_digest_items(
                     now=NOW,
                     days=7,
                 )
 
-        self.assertEqual([item["id"] for item in history], ["x:1"])
+        self.assertEqual(
+            {item["id"] for item in history},
+            {"x:1", "x:3"},
+        )
 
 
 if __name__ == "__main__":

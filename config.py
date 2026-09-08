@@ -704,12 +704,12 @@ TWITTER_COMMENT_FILTER = {
     "ignored_username_suffixes": ["bot"],
 }
 
-# 每日选择只限制发布数量，不截断进入内容筛选的候选。
-TWITTER_DAILY_PRIMARY_LIMIT = 8
-TWITTER_DAILY_MORE_LIMIT = 4
+# 每日选择只限制最终发布数量，不截断进入规则、Embedding 和评分阶段的候选。
+# HTML 与企业微信共享这一份结果，避免同一天出现两套数量和展示语义。
+TWITTER_DAILY_LIMIT = 8
 TWITTER_DAILY_AUTHOR_LIMIT = 1
 # 主题不设硬配额，只在重排时小幅扣分。这样互动质量仍决定主要顺序，
-# 同时避免十二条内容全部集中在一个主题。
+# 同时避免每日精选全部集中在一个主题。
 TWITTER_DAILY_TOPIC_REPEAT_PENALTY = 3.0
 TWITTER_DAILY_HISTORY_DAYS = 7
 TWITTER_DAILY_EVENT_TOKEN_OVERLAP = 0.4
@@ -721,7 +721,7 @@ TWITTER_DAILY_STANDARD_MAX_AGE_HOURS = 48
 TWITTER_DAILY_FALLBACK_MAX_AGE_HOURS = 168
 TWITTER_DAILY_FALLBACK_MIN_SOCIAL_SCORE = 0.85
 # 规则层允许带一手链接的冷启动内容继续评估，但最终发布仍需达到
-# 绝对互动底线，避免候选不足时用零互动内容填满 8+4。
+# 绝对互动底线，避免候选不足时用零互动内容填满每日上限。
 TWITTER_DAILY_MIN_WEIGHTED_ENGAGEMENT = 5.0
 
 TWITTER_TITLE_MAX_CHARS = 48

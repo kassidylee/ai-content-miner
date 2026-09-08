@@ -207,7 +207,7 @@ def run_twitter_workflow(
         print(f"Twitter Embedding 筛选失败：{exc}")
         return EXIT_EMBEDDING
 
-    print("\n[Twitter 4/8] 生成每日 8+4 选择")
+    print("\n[Twitter 4/8] 生成每日精选")
     try:
         recent_history = load_recent_twitter_digest_items()
     except TwitterResultStoreError as exc:
@@ -248,8 +248,7 @@ def run_twitter_workflow(
     print("\n[Twitter 7/8] 更新每日页面")
     try:
         report_path = render_twitter_feed(
-            primary_items=selection["primary"],
-            more_items=selection["more"],
+            items=selection["selected"],
             digest_date=str(selection["digest_date"]),
         )
     except (TwitterFeedRenderError, TwitterResultStoreError) as exc:
@@ -264,8 +263,7 @@ def run_twitter_workflow(
 
     print("\n[Twitter 8/8] 可选通知")
     if config.TWITTER_ENABLE_WECOM and not send_twitter_wecom(
-        selection["primary"],
-        more_count=len(selection["more"]),
+        selection["selected"],
     ):
         print("Twitter 通知失败，结果和采集状态已保留")
         return EXIT_NOTIFY
@@ -275,7 +273,6 @@ def run_twitter_workflow(
     print(
         f"Twitter 工作流完成：候选 {len(items)}，"
         f"预筛通过 {len(filtered['passed'])}，"
-        f"主推 {len(selection['primary'])}，"
-        f"补充 {len(selection['more'])}"
+        f"精选 {len(selection['selected'])}"
     )
     return EXIT_OK

@@ -367,7 +367,7 @@ ai-content-miner/
 │   ├── twitter_engagement.py   # Twitter 加权互动指标
 │   ├── twitter_embedding.py    # Twitter 多主题语义筛选
 │   ├── twitter_comments.py     # Twitter 回复区筛选
-│   ├── twitter_daily_selector.py # Twitter 每日 8+4 选择
+│   ├── twitter_daily_selector.py # Twitter 每日最多 8 条选择
 │   ├── twitter_enricher.py     # Twitter 摘要和标签
 │   └── twitter_pipeline.py     # Twitter 三层筛选编排
 │
@@ -594,8 +594,7 @@ Reddit 同样不生成逐条研报。所有候选帖子及筛选审计追加写�
 | `TWITTER_INTEREST_TOPICS` | Twitter Embedding 主题与独立阈值 | 列表 |
 | `TWITTER_EMBEDDING_FILTER_MODE` | Twitter 语义筛选模式 | `shadow`、`enforce` |
 | `TWITTER_COMMENT_FILTER` | Twitter 回复区筛选阈值 | 字典 |
-| `TWITTER_DAILY_PRIMARY_LIMIT` | 每日主推上限 | `8` |
-| `TWITTER_DAILY_MORE_LIMIT` | 每日折叠补充上限 | `4` |
+| `TWITTER_DAILY_LIMIT` | 每日精选上限，HTML 与企业微信共用 | `8` |
 | `TWITTER_DAILY_AUTHOR_LIMIT` | 同一作者每日上限 | `1` |
 | `TWITTER_DAILY_TOPIC_REPEAT_PENALTY` | 已选同主题每条重排扣分 | `3.0` |
 | `TWITTER_DAILY_STANDARD_MAX_AGE_HOURS` | 正常参与日刊排序的最长年龄 | `48` |
